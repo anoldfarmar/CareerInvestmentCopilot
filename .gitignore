@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+secrets/
+
+# Backend runtime data
+apps/backend/data/*
+!apps/backend/data/.gitkeep
+apps/backend/uploads/*
+!apps/backend/uploads/.gitkeep
+*.sqlite
+*.sqlite3
+*.db
+
+# Android build outputs
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/
+*.apk
+*.aab
+local.properties
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
