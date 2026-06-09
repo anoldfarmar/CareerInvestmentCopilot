@@ -1,0 +1,75 @@
+// 告诉 Prisma：生成可以在 TypeScript 中使用的数据库客户端
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 告诉 Prisma：我们连接的是 PostgreSQL 数据库
+// 具体连接地址由项目根目录的 prisma.config.ts 读取
+datasource db {
+  provider = "postgresql"
+}
+
+// User 类似 TypeScript 中的 interface User。
+// Prisma 会根据它创建数据库中的 User 表。
+model User {
+  // 主键：每新增一个用户，id 自动递增
+  id        Int      @id @default(autoincrement())
+
+  // 邮箱：必填，并且不能出现两个相同的邮箱
+  email     String   @unique
+
+  // 姓名：问号表示可选，允许暂时不填写
+  name      String?
+
+  // 密码哈希：只保存 bcrypt 哈希，绝不保存明文密码。
+  // 设为可空是为了兼容认证功能上线前创建的本地测试用户。
+  passwordHash String?
+
+  // 创建时间：新增用户时自动填写当前时间
+  createdAt DateTime @default(now())
+
+  // 更新时间：每次修改用户时自动更新
+  updatedAt DateTime @updatedAt
+
+  // 一个用户可以拥有多份简历。
+  // Resume[] 类似 TypeScript 中的 Resume[] 数组。
+  resumes   Resume[]
+}
+
+// Resume 表示一份简历。
+model Resume {
+  // 主键：每新增一份简历，id 自动递增
+  id        Int      @id @default(autoincrement())
+
+  // 简历标题，例如“前端工程师求职简历”
+  title     String
+
+  // 上传文件解析出的原始文本，便于回溯 AI 处理前的内容
+  originalContent   String   @default("") @db.Text
+
+  // AI 从原始文本中提取出的结构化简历 JSON
+  // 问号表示：刚上传但尚未解析时，可以暂时为空。
+  structuredContent Json?
+
+  // AI 优化后的结构化简历 JSON
+  // 与解析结果分开保存，方便比较优化前后的差异。
+  optimizedContent  Json?
+
+  // MinerU 异步解析任务 id。尚未发起解析时为空。
+  mineruTaskId       String?  @unique
+
+  // 解析状态，例如 not_started、pending、running、done、failed。
+  parseStatus        String   @default("not_started")
+
+  // 外键：记录这份简历属于哪一个用户
+  userId    Int
+
+  // 关系字段：让 Prisma 可以直接查询这份简历对应的用户
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 创建时间：新增简历时自动填写当前时间
+  createdAt DateTime @default(now())
+
+  // 更新时间：每次修改简历时自动更新
+  updatedAt DateTime @updatedAt
+}

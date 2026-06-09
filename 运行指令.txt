@@ -1,0 +1,4 @@
+npm run start:dev
+npx prisma studio
+
+npm run dev

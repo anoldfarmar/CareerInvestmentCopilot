@@ -1,0 +1,29 @@
+body {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+}
+
+a {
+  color: inherit;
+}
+
+.adm-button {
+  font-weight: 600;
+}
+
+.adm-button-primary {
+  --background-color: var(--color-primary);
+  --border-color: var(--color-primary);
+}
+
+.adm-selector {
+  --checked-color: var(--color-primary);
+}
