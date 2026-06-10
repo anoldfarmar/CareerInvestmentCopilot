@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
 
     lanxin_api_base_url: str = ""
+    lanxin_app_id: str = ""
     lanxin_api_key: str = ""
     lanxin_text_model: str = ""
     lanxin_asr_model: str = ""
@@ -32,4 +33,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

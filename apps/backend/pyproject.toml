@@ -7,6 +7,7 @@ dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.30.0",
   "pydantic-settings>=2.4.0",
+  "requests>=2.32.0",
   "sqlmodel>=0.0.22",
   "python-multipart>=0.0.9",
 ]
@@ -14,3 +15,6 @@ dependencies = [
 [tool.ruff]
 line-length = 100
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["data*", "uploads*", "长语音转写python接入demo*"]

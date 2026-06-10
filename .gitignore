@@ -43,6 +43,10 @@ local.properties
 .DS_Store
 Thumbs.db
 
+# Python build artifacts
+*.egg-info/
+*.egg-info
+
 # Logs
 *.log
 logs/
