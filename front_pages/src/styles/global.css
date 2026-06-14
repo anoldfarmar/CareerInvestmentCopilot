@@ -11,12 +11,25 @@ body {
   color: var(--color-text-primary);
 }
 
+:root:root {
+  --adm-color-primary: var(--color-primary);
+  --adm-color-success: var(--color-success);
+  --adm-color-warning: var(--color-warning);
+  --adm-color-danger: var(--color-danger);
+  --adm-font-size-main: var(--fs-body);
+  --adm-radius-s: var(--radius-xs);
+  --adm-radius-m: var(--radius-sm);
+  --adm-radius-l: var(--radius-md);
+  --adm-border-color: var(--color-border);
+}
+
 a {
   color: inherit;
 }
 
 .adm-button {
   font-weight: 600;
+  border-radius: var(--radius-md);
 }
 
 .adm-button-primary {
@@ -26,4 +39,68 @@ a {
 
 .adm-selector {
   --checked-color: var(--color-primary);
+}
+
+.adm-selector .adm-selector-item {
+  border-radius: var(--radius-md);
+  transition:
+    background var(--motion) ease,
+    border-color var(--motion) ease,
+    color var(--motion) ease,
+    transform var(--motion) ease;
+}
+
+.adm-selector .adm-selector-item:active {
+  transform: scale(0.98);
+}
+
+.adm-input,
+.adm-text-area {
+  --font-size: var(--fs-body);
+  --color: var(--color-text-primary);
+  --placeholder-color: var(--color-text-disabled);
+}
+
+.adm-input-element,
+.adm-text-area-element {
+  box-sizing: border-box;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #fff;
+  line-height: var(--lh-normal);
+  transition:
+    border-color var(--motion) ease,
+    box-shadow var(--motion) ease,
+    background var(--motion) ease;
+}
+
+.adm-text-area-element {
+  min-height: 96px;
+  resize: none;
+}
+
+.adm-input-element:focus,
+.adm-text-area-element:focus {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+.adm-popup-body {
+  box-shadow: var(--shadow-floating);
+}
+
+.adm-dialog-body,
+.adm-modal-body {
+  border-radius: var(--radius-xl);
+}
+
+.adm-switch-checkbox {
+  background: var(--color-border);
+}
+
+.adm-switch-checked .adm-switch-checkbox {
+  background: var(--color-primary);
 }

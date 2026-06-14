@@ -1,7 +1,14 @@
+import { http } from "@/services/http";
+
 import { mockHomeOverview } from "./mock";
 import type { HomeOverview } from "./types";
 
 export async function getHomeOverview(): Promise<HomeOverview> {
-  await new Promise((resolve) => window.setTimeout(resolve, 350));
-  return mockHomeOverview;
+  const token = window.localStorage.getItem("token");
+  if (!token) {
+    return mockHomeOverview;
+  }
+
+  const { data } = await http.get<HomeOverview>("/overview");
+  return data;
 }

@@ -1,14 +1,28 @@
-import { Button, Selector } from "antd-mobile";
+import { Button, Dialog, Selector, Toast } from "antd-mobile";
 import { useNavigate } from "react-router-dom";
 
 import { routePaths } from "@/app/router/routePaths";
 import { AppShell } from "@/components/common/AppShell/AppShell";
-import { EmptyState, ErrorState, LoadingState } from "@/components/common/State/State";
-import { useReports } from "@/features/report/hooks";
+import { EmptyState, ErrorState, SkeletonState } from "@/components/common/State/State";
+import { useDeleteReport, useReports } from "@/features/report/hooks";
 
 export function ReportListPage() {
   const navigate = useNavigate();
   const { data, isLoading, isError, refetch } = useReports();
+  const deleteMutation = useDeleteReport();
+
+  async function handleDeleteReport(reportId: string) {
+    const confirmed = await Dialog.confirm({
+      title: "删除复盘报告",
+      content: "确认删除这份复盘报告吗？删除后不会影响原来的面试记录。",
+      confirmText: "删除",
+      cancelText: "取消",
+    });
+    if (!confirmed) return;
+
+    await deleteMutation.mutateAsync(reportId);
+    Toast.show("复盘报告已删除");
+  }
 
   return (
     <AppShell title="复盘报告">
@@ -29,7 +43,7 @@ export function ReportListPage() {
           模拟面试复盘会保留 AI 训练报告；真实面试复盘可沉淀录音和对话，形成专属知识库。
         </p>
       </section>
-      {isLoading ? <LoadingState text="正在加载复盘报告" /> : null}
+      {isLoading ? <SkeletonState rows={3} /> : null}
       {isError ? <ErrorState title="报告列表加载失败" description="请稍后重试。" onAction={() => void refetch()} /> : null}
       {data && data.length === 0 ? (
         <EmptyState
@@ -51,9 +65,20 @@ export function ReportListPage() {
                 {report.createdAt} · {report.level}
               </p>
               <p style={{ margin: 0, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>{report.summary}</p>
-              <Button block fill="outline" onClick={() => navigate(routePaths.reportDetail(report.reportId))}>
-                查看详情
-              </Button>
+              <div className="resume-action-grid">
+                <Button block fill="outline" onClick={() => navigate(routePaths.reportDetail(report.reportId))}>
+                  查看详情
+                </Button>
+                <Button
+                  block
+                  fill="outline"
+                  color="danger"
+                  loading={deleteMutation.isPending}
+                  onClick={() => void handleDeleteReport(report.reportId)}
+                >
+                  删除报告
+                </Button>
+              </div>
             </article>
           ))}
         </div>

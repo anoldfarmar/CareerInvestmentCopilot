@@ -8,6 +8,21 @@ export const mockInterviewSession: InterviewSession = {
   startedAt: new Date().toISOString(),
   ended: false,
   knowledgeBaseIds: [],
+  questionsPreview: [
+    {
+      id: "q-1",
+      order: 1,
+      content: "第 1 题：请先用 2 分钟介绍一个最能体现你工程能力的项目。",
+      dimension: "professional",
+      dimensionLabel: "技能深挖",
+      difficulty: "medium",
+      difficultyLabel: "中等",
+      sourceType: "rule",
+      sourceLabel: "基础智能问题",
+      skipped: false,
+    },
+  ],
+  questionFeedback: {},
   messages: [
     {
       id: "msg_001",

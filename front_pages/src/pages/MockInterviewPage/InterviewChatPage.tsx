@@ -6,9 +6,14 @@ import { useNavigate, useParams } from "react-router-dom";
 import { routePaths } from "@/app/router/routePaths";
 import { AppShell } from "@/components/common/AppShell/AppShell";
 import { ErrorState, LoadingState } from "@/components/common/State/State";
-import { ChatBubble } from "@/components/interview/ChatBubble/ChatBubble";
+import { ChatBubble, TypingBubble } from "@/components/interview/ChatBubble/ChatBubble";
 import { VoiceInputBar } from "@/components/interview/VoiceInputBar/VoiceInputBar";
-import { useEndInterviewSession, useInterviewSession, useSubmitInterviewAnswer } from "@/features/interview/hooks";
+import {
+  useEndInterviewSession,
+  useInterviewSession,
+  useMoveToNextInterviewQuestion,
+  useSubmitInterviewAnswer,
+} from "@/features/interview/hooks";
 import { useInterviewStore } from "@/stores/interviewStore";
 
 export function InterviewChatPage() {
@@ -20,11 +25,12 @@ export function InterviewChatPage() {
   const resetInterviewDraft = useInterviewStore((state) => state.resetInterviewDraft);
   const { data, isLoading, isError, refetch } = useInterviewSession(sessionId);
   const submitMutation = useSubmitInterviewAnswer();
+  const nextQuestionMutation = useMoveToNextInterviewQuestion();
   const endMutation = useEndInterviewSession();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [data?.messages.length]);
+  }, [data?.messages.length, submitMutation.isPending, nextQuestionMutation.isPending]);
 
   async function handleSend() {
     const answer = draftAnswer.trim();
@@ -32,8 +38,13 @@ export function InterviewChatPage() {
       Toast.show("请先输入回答");
       return;
     }
+
     resetInterviewDraft();
     await submitMutation.mutateAsync({ sessionId, answer });
+  }
+
+  async function handleNextQuestion() {
+    await nextQuestionMutation.mutateAsync(sessionId);
   }
 
   async function handleEnd() {
@@ -52,14 +63,16 @@ export function InterviewChatPage() {
       {isLoading ? <LoadingState text="正在进入面试房间" /> : null}
       {isError ? <ErrorState title="面试会话加载失败" description="请重试进入。" onAction={() => void refetch()} /> : null}
       {data ? (
-        <div className="page-stack" style={{ minHeight: "calc(100dvh - 96px)" }}>
+        <div className="page-stack chat-page">
           <section>
             {data.messages.map((message) => (
               <ChatBubble key={message.id} message={message} />
             ))}
+            {submitMutation.isPending || nextQuestionMutation.isPending ? <TypingBubble /> : null}
             <div ref={bottomRef} />
           </section>
-          <section className="card page-stack" style={{ position: "sticky", bottom: 0 }}>
+
+          <section className="card page-stack chat-input-bar">
             <TextArea
               rows={2}
               maxLength={600}
@@ -67,12 +80,33 @@ export function InterviewChatPage() {
               placeholder="输入你的回答，建议先结论后展开"
               onChange={setDraftAnswer}
             />
-            <div className="row">
-              <VoiceInputBar onTranscribed={(text) => setDraftAnswer(text)} />
-              <Button color="primary" loading={submitMutation.isPending} onClick={() => void handleSend()}>
+            <div className="chat-input-actions">
+              <VoiceInputBar value={draftAnswer} onTranscribed={(text) => setDraftAnswer(text)} />
+              <Button
+                className="chat-send-btn"
+                color="primary"
+                loading={submitMutation.isPending}
+                disabled={nextQuestionMutation.isPending || data.ended}
+                onClick={() => void handleSend()}
+              >
                 <SendHorizontal size={16} /> 发送
               </Button>
-              <Button fill="outline" loading={endMutation.isPending} onClick={() => void handleEnd()}>
+              <Button
+                className="chat-end-btn"
+                fill="outline"
+                loading={nextQuestionMutation.isPending}
+                disabled={submitMutation.isPending || data.ended}
+                onClick={() => void handleNextQuestion()}
+              >
+                进入下一题
+              </Button>
+              <Button
+                className="chat-end-btn"
+                fill="outline"
+                loading={endMutation.isPending}
+                disabled={submitMutation.isPending || nextQuestionMutation.isPending}
+                onClick={() => void handleEnd()}
+              >
                 结束
               </Button>
             </div>

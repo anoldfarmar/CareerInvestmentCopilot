@@ -1,4 +1,5 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
+import { externalFetch } from '../common/http/external-http.client';
 
 type MineruResponse<T> = {
   code: number;
@@ -53,7 +54,10 @@ export class MineruService {
       }),
     });
 
-    const uploadResponse = await fetch(task.file_url, {
+    const uploadResponse = await externalFetch(task.file_url, {
+      serviceName: 'MinerUUpload',
+      timeoutMs: Number(process.env.MINERU_UPLOAD_TIMEOUT_MS ?? 15000),
+      userMessage: '简历解析服务繁忙，请稍后重试',
       method: 'PUT',
       // 转为标准 Uint8Array，内容不变，同时符合 fetch 的 BodyInit 类型。
       body: Uint8Array.from(file.buffer),
@@ -82,7 +86,13 @@ export class MineruService {
       return task;
     }
 
-    const markdownResponse = await fetch(task.markdown_url);
+    const markdownResponse = await externalFetch(task.markdown_url, {
+      serviceName: 'MinerUMarkdown',
+      timeoutMs: Number(process.env.MINERU_TIMEOUT_MS ?? 15000),
+      retries: 2,
+      retryDelayMs: 500,
+      userMessage: '简历解析结果下载失败，请稍后重试',
+    });
     if (!markdownResponse.ok) {
       throw new BadGatewayException(
         `下载 MinerU Markdown 失败，HTTP ${markdownResponse.status}`,
@@ -98,16 +108,21 @@ export class MineruService {
   // 统一处理 MinerU 的 HTTP 错误和业务错误码。
   private async request<T>(path: string, init?: RequestInit) {
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, init);
+      const response = await externalFetch(`${this.baseUrl}${path}`, {
+        serviceName: 'MinerU',
+        timeoutMs: Number(process.env.MINERU_TIMEOUT_MS ?? 15000),
+        retries: init?.method && init.method !== 'GET' ? 0 : 2,
+        retryDelayMs: 500,
+        userMessage: '简历解析服务繁忙，请稍后重试',
+        ...init,
+      });
       if (!response.ok) {
-        throw new BadGatewayException(
-          `MinerU 请求失败，HTTP ${response.status}`,
-        );
+        throw new BadGatewayException('简历解析服务繁忙，请稍后重试');
       }
 
       const result = (await response.json()) as MineruResponse<T>;
       if (result.code !== 0) {
-        throw new BadGatewayException(`MinerU 请求失败：${result.msg}`);
+        throw new BadGatewayException('简历解析服务繁忙，请稍后重试');
       }
 
       return result.data;
@@ -116,7 +131,7 @@ export class MineruService {
         throw error;
       }
 
-      throw new BadGatewayException('无法连接 MinerU 服务');
+      throw new BadGatewayException('简历解析服务繁忙，请稍后重试');
     }
   }
 }

@@ -28,10 +28,38 @@
   gap: 3px;
   color: var(--color-text-tertiary);
   text-decoration: none;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
+  transition:
+    color var(--motion) ease,
+    transform var(--motion) ease;
+}
+
+.item svg,
+.activeItem svg {
+  transition: transform var(--motion) ease;
 }
 
 .activeItem {
   color: var(--color-primary);
+  font-weight: 600;
+}
+
+.activeItem svg {
+  transform: translateY(-1px) scale(1.12);
+}
+
+.activeItem::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  width: 22px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-primary);
+}
+
+.item,
+.activeItem {
+  position: relative;
 }

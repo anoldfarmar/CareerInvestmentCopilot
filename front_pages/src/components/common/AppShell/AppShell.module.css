@@ -1,6 +1,8 @@
 .shell {
   min-height: 100dvh;
-  background: var(--color-bg);
+  background:
+    radial-gradient(circle at top left, rgba(var(--color-primary-rgb), 0.1), transparent 30%),
+    linear-gradient(180deg, #eef4ff 0%, var(--color-bg) 42%);
 }
 
 .main,
@@ -14,4 +16,18 @@
 
 .mainNoTab {
   padding-bottom: calc(20px + var(--safe-bottom));
+}
+
+@media (min-width: 768px) {
+  .shell {
+    padding: 18px 0;
+  }
+
+  .main,
+  .mainNoTab {
+    border: 1px solid rgba(229, 230, 235, 0.72);
+    border-radius: var(--radius-xl);
+    background: rgba(245, 247, 250, 0.86);
+    box-shadow: var(--shadow-floating);
+  }
 }

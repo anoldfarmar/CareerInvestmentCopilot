@@ -9,6 +9,14 @@
   border-radius: var(--radius-lg);
   background: #ffffff;
   text-align: left;
+  transition:
+    border-color var(--motion) ease,
+    background var(--motion) ease,
+    transform var(--motion) ease;
+}
+
+.card:active {
+  transform: scale(0.98);
 }
 
 .selected {

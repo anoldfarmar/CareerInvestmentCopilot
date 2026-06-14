@@ -20,18 +20,21 @@ export const resumeOptimizeSchema = z
   });
 
 export const linkRecordSchema = z.object({
-  companyName: z.string().min(1, "请输入公司名称"),
-  jobTitle: z.string().min(1, "请输入岗位名称"),
-  url: z.string().url("请输入有效链接"),
-  status: z.enum(["pending", "applied", "interview", "offer", "rejected"], {
-    required_error: "请选择投递状态",
+  title: z.string().min(1, "请输入岗位名称").max(120, "岗位名称最多 120 个字符"),
+  company: z.string().max(120, "公司名称最多 120 个字符").optional(),
+  description: z.string().min(30, "岗位 JD 至少需要 30 个字符").max(30000, "岗位 JD 最多 30000 个字符"),
+  sourceUrl: z
+    .string()
+    .optional()
+    .refine((value) => !value || /^https?:\/\/.+/i.test(value), "请输入有效链接"),
+  status: z.enum(["draft", "interested", "applied", "interviewing", "offer", "rejected", "archived"], {
+    required_error: "请选择岗位状态",
   }),
-  remark: z.string().optional(),
 });
 
 export const interviewSetupSchema = z.object({
   interviewType: z.enum(["general", "professional", "behavioral", "stress", "english"]),
-  resumeId: z.string().optional(),
+  resumeId: z.string().min(1, "请选择一份已结构化或已优化的简历"),
   jobDescription: z.string().optional(),
   knowledgeBaseIds: z.array(z.string()),
   questionCount: z.union([z.literal(5), z.literal(8), z.literal(10)]),

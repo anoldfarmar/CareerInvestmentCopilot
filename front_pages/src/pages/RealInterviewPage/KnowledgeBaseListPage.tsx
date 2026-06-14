@@ -5,8 +5,8 @@ import { useNavigate } from "react-router-dom";
 
 import { routePaths } from "@/app/router/routePaths";
 import { AppShell } from "@/components/common/AppShell/AppShell";
-import { EmptyState, ErrorState, LoadingState } from "@/components/common/State/State";
-import { useCreateKnowledgeBase, useKnowledgeBases } from "@/features/knowledgeBase/hooks";
+import { EmptyState, ErrorState, SkeletonState } from "@/components/common/State/State";
+import { useCreateKnowledgeBase, useDeleteKnowledgeBase, useKnowledgeBases } from "@/features/knowledgeBase/hooks";
 
 export function KnowledgeBaseListPage() {
   const navigate = useNavigate();
@@ -15,6 +15,7 @@ export function KnowledgeBaseListPage() {
   const [description, setDescription] = useState("");
   const { data, isLoading, isError, refetch } = useKnowledgeBases();
   const createMutation = useCreateKnowledgeBase();
+  const deleteMutation = useDeleteKnowledgeBase();
 
   function openCreate() {
     setName("");
@@ -36,16 +37,22 @@ export function KnowledgeBaseListPage() {
     navigate(routePaths.realInterviewKnowledgeBaseDetail(knowledgeBase.id));
   }
 
+  async function handleDelete(knowledgeBaseId: string, knowledgeBaseName: string) {
+    const confirmed = window.confirm(`确定删除知识库「${knowledgeBaseName}」吗？里面的面试记录也会一起删除。`);
+    if (!confirmed) return;
+
+    await deleteMutation.mutateAsync(knowledgeBaseId);
+    Toast.show("知识库已删除");
+  }
+
   return (
     <AppShell title="真实面试知识库" showBack>
       <div className="page-stack">
         <section className="card page-stack">
           <div className="row">
             <div>
-              <strong>按领域或岗位沉淀真实面试</strong>
-              <p className="muted" style={{ margin: "5px 0 0", lineHeight: 1.5 }}>
-                每个板块都会形成可用于模拟面试出题的专属知识库。
-              </p>
+              <strong>沉淀真实面试，反哺模拟训练</strong>
+              <p className="muted mt-1">每个知识库都会形成可用于模拟面试出题的专属素材。</p>
             </div>
             <Button color="primary" size="small" onClick={openCreate}>
               <Plus size={15} /> 新建
@@ -53,62 +60,79 @@ export function KnowledgeBaseListPage() {
           </div>
         </section>
 
-        {isLoading ? <LoadingState text="正在加载真实面试知识库" /> : null}
+        {isLoading ? <SkeletonState rows={3} /> : null}
         {isError ? (
           <ErrorState title="知识库加载失败" description="请稍后重试。" onAction={() => void refetch()} />
         ) : null}
         {data?.length === 0 ? (
           <EmptyState
             title="还没有真实面试知识库"
-            description="创建 IT、金融、前端、后端或任意自定义板块，开始沉淀面试经验。"
+            description="创建前端、后端、金融、算法或任意自定义板块，开始沉淀面试经验。"
             actionText="新建知识库"
             onAction={openCreate}
           />
         ) : null}
         {data?.map((knowledgeBase) => (
-          <button
-            type="button"
-            className="card"
+          <article
+            role="button"
+            tabIndex={0}
+            className="card card-button page-stack"
             key={knowledgeBase.id}
             onClick={() => navigate(routePaths.realInterviewKnowledgeBaseDetail(knowledgeBase.id))}
-            style={{ width: "100%", border: 0, textAlign: "left" }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                navigate(routePaths.realInterviewKnowledgeBaseDetail(knowledgeBase.id));
+              }
+            }}
           >
             <div className="row">
-              <span
-                style={{
-                  width: 42,
-                  height: 42,
-                  display: "grid",
-                  placeItems: "center",
-                  borderRadius: 14,
-                  color: "var(--color-primary)",
-                  background: "var(--color-primary-light)",
-                }}
-              >
+              <span className="icon-badge">
                 <BookOpen size={20} />
               </span>
-              <span style={{ flex: 1 }}>
+              <span className="flex-1">
                 <strong>{knowledgeBase.name}</strong>
-                <span className="muted" style={{ display: "block", marginTop: 5 }}>
+                <span className="muted block-muted mt-1">
                   {knowledgeBase.recordCount} 场真实面试 · 更新于 {knowledgeBase.updatedAt}
                 </span>
               </span>
             </div>
-            {knowledgeBase.description ? (
-              <p className="muted" style={{ margin: "12px 0 0", lineHeight: 1.6 }}>
-                {knowledgeBase.description}
-              </p>
-            ) : null}
+            {knowledgeBase.description ? <p className="muted text-block">{knowledgeBase.description}</p> : null}
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <Button
+                size="small"
+                fill="none"
+                color="danger"
+                loading={deleteMutation.isPending}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void handleDelete(knowledgeBase.id, knowledgeBase.name);
+                }}
+              >
+                删除
+              </Button>
+            </div>
+            <section className="knowledge-impact-card">
+              <div className="row">
+                <strong>影响统计</strong>
+                <span className="pill">
+                  本月 {knowledgeBase.impactStats?.monthlyQuestionCount ?? 0} 道题
+                </span>
+              </div>
+              <p>{knowledgeBase.impactStats?.recommendation ?? "下次模拟面试可勾选这个知识库。"}</p>
+              <span className="muted">
+                关联模拟面试 {knowledgeBase.impactStats?.relatedSessionCount ?? 0} 场
+              </span>
+            </section>
             {knowledgeBase.focusAreas.length > 0 ? (
-              <div style={{ marginTop: 10 }}>
+              <div className="pill-list">
                 {knowledgeBase.focusAreas.map((area) => (
-                  <span className="pill" key={area} style={{ marginRight: 6 }}>
+                  <span className="pill" key={area}>
                     {area}
                   </span>
                 ))}
               </div>
             ) : null}
-          </button>
+          </article>
         ))}
       </div>
 

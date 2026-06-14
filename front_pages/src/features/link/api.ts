@@ -1,54 +1,42 @@
 import { http } from "@/services/http";
+import { unwrapItems, type PaginatedResponse } from "@/services/pagination";
 
-import { mockLinks } from "./mock";
-import type { LinkRecord, LinkRecordInput, LinkStatus } from "./types";
+import type { LinkAnalysisSummary, LinkRecord, LinkRecordInput, LinkStatus } from "./types";
 
-// 投递管理后端尚未接入，当前继续使用本地 Mock。
-const useMock = true;
-let linkStore = [...mockLinks];
+function normalizeInput(input: LinkRecordInput) {
+  return {
+    title: input.title.trim(),
+    description: input.description.trim(),
+    status: input.status,
+    ...(input.company?.trim() ? { company: input.company.trim() } : {}),
+    ...(input.sourceUrl?.trim() ? { sourceUrl: input.sourceUrl.trim() } : {}),
+  };
+}
 
 export async function getLinks(status?: LinkStatus | "all"): Promise<LinkRecord[]> {
-  if (!useMock) {
-    const { data } = await http.get<LinkRecord[]>("/links", { params: { status } });
-    return data;
-  }
-  await new Promise((resolve) => window.setTimeout(resolve, 250));
-  if (!status || status === "all") return linkStore;
-  return linkStore.filter((item) => item.status === status);
+  const { data } = await http.get<LinkRecord[] | PaginatedResponse<LinkRecord>>("/jobs");
+  const items = unwrapItems(data);
+
+  if (!status || status === "all") return items;
+  return items.filter((item) => item.status === status);
+}
+
+export async function getLinkAnalysis(): Promise<LinkAnalysisSummary> {
+  const { data } = await http.get<LinkAnalysisSummary>("/jobs/analysis/summary");
+  return data;
 }
 
 export async function createLink(input: LinkRecordInput): Promise<LinkRecord> {
-  if (!useMock) {
-    const { data } = await http.post<LinkRecord>("/links", input);
-    return data;
-  }
-  await new Promise((resolve) => window.setTimeout(resolve, 350));
-  const record: LinkRecord = {
-    ...input,
-    id: `link_${Date.now()}`,
-    updatedAt: new Date().toISOString().slice(0, 10),
-  };
-  linkStore = [record, ...linkStore];
-  return record;
+  const { data } = await http.post<LinkRecord>("/jobs", normalizeInput(input));
+  return data;
 }
 
-export async function updateLink(id: string, input: LinkRecordInput): Promise<LinkRecord> {
-  if (!useMock) {
-    const { data } = await http.put<LinkRecord>(`/links/${id}`, input);
-    return data;
-  }
-  await new Promise((resolve) => window.setTimeout(resolve, 350));
-  const updated: LinkRecord = { ...input, id, updatedAt: new Date().toISOString().slice(0, 10) };
-  linkStore = linkStore.map((item) => (item.id === id ? updated : item));
-  return updated;
+export async function updateLink(id: number, input: LinkRecordInput): Promise<LinkRecord> {
+  const { data } = await http.patch<LinkRecord>(`/jobs/${id}`, normalizeInput(input));
+  return data;
 }
 
-export async function deleteLink(id: string): Promise<string> {
-  if (!useMock) {
-    await http.delete(`/links/${id}`);
-    return id;
-  }
-  await new Promise((resolve) => window.setTimeout(resolve, 250));
-  linkStore = linkStore.filter((item) => item.id !== id);
+export async function deleteLink(id: number): Promise<number> {
+  await http.delete(`/jobs/${id}`);
   return id;
 }

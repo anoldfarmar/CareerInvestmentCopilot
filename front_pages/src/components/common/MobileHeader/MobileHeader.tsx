@@ -80,8 +80,8 @@ export function MobileHeader({ title, showBack, showMenu, rightSlot }: MobileHea
           <Button block fill="none" onClick={() => navigateFromMenu(routePaths.resumeOptimize)}>
             <FileText size={17} /> 简历优化
           </Button>
-          <Button block fill="none" onClick={() => navigateFromMenu(routePaths.linkManage)}>
-            <BriefcaseBusiness size={17} /> 投递链接管理
+          <Button block fill="none" onClick={() => navigateFromMenu(routePaths.jobManage)}>
+            <BriefcaseBusiness size={17} /> 岗位/JD 管理
           </Button>
           <Button block fill="none" onClick={() => navigateFromMenu(routePaths.profile)}>
             <Settings size={17} /> 个人求职模式

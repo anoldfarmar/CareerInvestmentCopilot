@@ -12,7 +12,7 @@ export function ScoreSummaryCard({ score, level, summary }: ScoreSummaryCardProp
       <ResumeScoreRing score={score} label="面试评分" size={112} />
       <div>
         <span className="pill">{level}</span>
-        <p style={{ margin: "10px 0 0", fontSize: 13, lineHeight: 1.6, color: "var(--color-text-secondary)" }}>
+        <p className="text-block mt-3">
           {summary}
         </p>
       </div>

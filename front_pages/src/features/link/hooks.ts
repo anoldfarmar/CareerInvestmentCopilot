@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { createLink, deleteLink, getLinks, updateLink } from "./api";
+import { createLink, deleteLink, getLinkAnalysis, getLinks, updateLink } from "./api";
 import type { LinkRecordInput, LinkStatus } from "./types";
 
-export function useLinks(status: LinkStatus | "all") {
-  return useQuery({ queryKey: ["links", status], queryFn: () => getLinks(status) });
+export function useLinks(status: LinkStatus | "all", enabled = true) {
+  return useQuery({ queryKey: ["links", status], queryFn: () => getLinks(status), enabled });
+}
+
+export function useLinkAnalysis(enabled = true) {
+  return useQuery({ queryKey: ["links", "analysis"], queryFn: getLinkAnalysis, enabled });
 }
 
 export function useCreateLink() {
@@ -18,7 +22,7 @@ export function useCreateLink() {
 export function useUpdateLink() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, input }: { id: string; input: LinkRecordInput }) => updateLink(id, input),
+    mutationFn: ({ id, input }: { id: number; input: LinkRecordInput }) => updateLink(id, input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["links"] }),
   });
 }

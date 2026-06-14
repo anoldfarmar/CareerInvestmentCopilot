@@ -1,16 +1,24 @@
 import { http } from "@/services/http";
 
 import { mockInterviewSession, mockProgress } from "./mock";
-import type { InterviewMessage, InterviewProgress, InterviewSession, InterviewSetupFormValues } from "./types";
+import type {
+  InterviewMessage,
+  InterviewProgress,
+  InterviewQuestionFeedback,
+  InterviewSession,
+  InterviewSetupFormValues,
+} from "./types";
 
-// 面试后端尚未接入，当前继续使用本地 Mock。
-const useMock = true;
+// 模拟面试已接入后端真实接口；mock 只作为开发兜底保留。
+const useMock = false;
 
 let sessionStore: InterviewSession = mockInterviewSession;
 
 export async function createInterviewSession(values: InterviewSetupFormValues): Promise<InterviewSession> {
   if (!useMock) {
-    const { data } = await http.post<InterviewSession>("/interviews/sessions", values);
+    const { data } = await http.post<InterviewSession>("/interviews/sessions", values, {
+      timeout: 120000,
+    });
     return data;
   }
   await new Promise((resolve) => window.setTimeout(resolve, 700));
@@ -33,6 +41,49 @@ export async function getInterviewSession(sessionId: string): Promise<InterviewS
   }
   await new Promise((resolve) => window.setTimeout(resolve, 260));
   return { ...sessionStore, sessionId };
+}
+
+export async function getLatestActiveInterviewSession(): Promise<InterviewSession | null> {
+  if (!useMock) {
+    const { data } = await http.get<InterviewSession | null>("/interviews/sessions/active/latest");
+    return data;
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, 200));
+  return sessionStore.ended ? null : sessionStore;
+}
+
+export async function skipInterviewQuestion(params: {
+  sessionId: string;
+  questionId: string;
+}): Promise<InterviewSession> {
+  const { data } = await http.post<InterviewSession>(
+    `/interviews/sessions/${params.sessionId}/questions/${params.questionId}/skip`,
+  );
+  return data;
+}
+
+export async function addInterviewQuestion(params: {
+  sessionId: string;
+  content?: string;
+  dimension?: string;
+}): Promise<InterviewSession> {
+  const { data } = await http.post<InterviewSession>(`/interviews/sessions/${params.sessionId}/questions`, {
+    content: params.content,
+    dimension: params.dimension,
+  });
+  return data;
+}
+
+export async function submitQuestionFeedback(params: {
+  sessionId: string;
+  questionId: string;
+  feedback: InterviewQuestionFeedback;
+}): Promise<InterviewSession> {
+  const { data } = await http.post<InterviewSession>(
+    `/interviews/sessions/${params.sessionId}/questions/${params.questionId}/feedback`,
+    params.feedback,
+  );
+  return data;
 }
 
 export async function submitInterviewAnswer(params: {
@@ -72,6 +123,11 @@ export async function submitInterviewAnswer(params: {
     messages: [...sessionStore.messages, userMessage, assistantMessage],
   };
   return sessionStore;
+}
+
+export async function moveToNextInterviewQuestion(sessionId: string): Promise<InterviewSession> {
+  const { data } = await http.post<InterviewSession>(`/interviews/sessions/${sessionId}/next-question`);
+  return data;
 }
 
 export async function endInterviewSession(sessionId: string): Promise<InterviewProgress> {

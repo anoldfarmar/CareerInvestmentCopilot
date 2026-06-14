@@ -61,18 +61,25 @@ export const RESUME_OPTIMIZE_SYSTEM_PROMPT = `
 export function createResumeOptimizeUserPrompt(
   structuredResume: unknown,
   jobDescription?: string,
+  additionalInstruction?: string,
 ) {
   const optimizationMode = jobDescription?.trim()
     ? `请根据以下目标岗位 JD 做定向优化：\n\n${jobDescription.trim()}`
     : '用户没有提供目标岗位 JD，请执行通用简历优化。';
+  const userInstruction = additionalInstruction?.trim()
+    ? `用户对当前优化稿提出了进一步要求，请在不虚构事实的前提下尽量满足：\n\n${additionalInstruction.trim()}`
+    : '用户没有提出额外优化要求。';
 
   return `
 请优化下面的结构化简历 JSON。
 
 ${optimizationMode}
 
+${userInstruction}
+
 再次强调：
 - 允许优化表达，但禁止虚构事实。
+- 如果这是多轮优化，请基于当前给定简历继续优化，不要回退到旧表达。
 - JD 中存在但简历未体现的能力，只能写入 optimizationNotes 作为建议。
 - 只返回合法 JSON。
 

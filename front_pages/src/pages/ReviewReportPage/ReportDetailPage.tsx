@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { routePaths } from "@/app/router/routePaths";
 import { AppShell } from "@/components/common/AppShell/AppShell";
-import { ErrorState, LoadingState } from "@/components/common/State/State";
+import { ErrorState, SkeletonState } from "@/components/common/State/State";
 import { QuestionReviewCard } from "@/components/report/QuestionReviewCard/QuestionReviewCard";
 import { RadarReviewChart } from "@/components/report/RadarReviewChart/RadarReviewChart";
 import { ScoreSummaryCard } from "@/components/report/ScoreSummaryCard/ScoreSummaryCard";
@@ -16,17 +16,37 @@ export function ReportDetailPage() {
 
   return (
     <AppShell title="面试复盘报告" showBack showTabBar={false}>
-      {isLoading ? <LoadingState text="正在加载报告详情" /> : null}
+      {isLoading ? <SkeletonState rows={3} /> : null}
       {isError ? <ErrorState title="报告详情加载失败" description="请稍后重试。" onAction={() => void refetch()} /> : null}
       {data ? (
         <div className="page-stack">
           <ScoreSummaryCard score={data.score} level={data.level} summary={data.summary} />
+          {data.topDirections.length ? (
+            <section className="card page-stack">
+              <div className="section-title">
+                <h2>Top 3 改进方向</h2>
+              </div>
+              {data.topDirections.map((direction) => (
+                <article className="report-direction-card" key={direction.title}>
+                  <strong>{direction.title}</strong>
+                  <p>{direction.reason}</p>
+                  <div className="pill-list">
+                    {direction.actions.map((action) => (
+                      <span className="pill" key={action}>
+                        {action}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </section>
+          ) : null}
           <section className="card">
             <strong>评分维度</strong>
             <RadarReviewChart dimensions={data.dimensions} />
           </section>
           <div className="section-title">
-            <h2>逐题复盘</h2>
+            <h2>逐题诊断</h2>
           </div>
           {data.questions.length > 0 ? (
             data.questions.map((review) => <QuestionReviewCard key={review.id} review={review} />)

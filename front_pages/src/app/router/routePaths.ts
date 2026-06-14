@@ -12,7 +12,8 @@ export const routePaths = {
   realInterviewKnowledgeBases: "/review-report/real-interviews",
   realInterviewKnowledgeBaseDetail: (knowledgeBaseId: string) =>
     `/review-report/real-interviews/${knowledgeBaseId}`,
-  linkManage: "/link-manage",
+  jobManage: "/jobs",
+  linkManage: "/jobs",
   profile: "/profile",
   auth: "/auth",
 } as const;

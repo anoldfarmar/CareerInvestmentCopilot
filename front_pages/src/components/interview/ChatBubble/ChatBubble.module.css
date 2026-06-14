@@ -2,6 +2,24 @@
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
+  animation: bubble-in var(--motion-slow) ease both;
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row {
+    animation: none;
+  }
 }
 
 .assistant {
@@ -39,6 +57,22 @@
   line-height: 1.55;
 }
 
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.meta span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .user .bubble {
   background: var(--color-primary);
   color: #ffffff;
@@ -46,7 +80,50 @@
 
 .system .bubble {
   max-width: 100%;
-  color: #b35a00;
+  color: var(--color-accent);
   background: var(--color-accent-light);
-  border: 1px solid #ffb366;
+  border: 1px solid rgba(255, 125, 0, 0.35);
+}
+
+/* 打字指示器：AI 出题等待时的三个跳动圆点 */
+.typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 13px 14px;
+}
+
+.typing span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+  animation: typing-bounce 1.2s ease infinite;
+}
+
+.typing span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing span {
+    animation: none;
+  }
 }

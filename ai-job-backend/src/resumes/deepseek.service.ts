@@ -15,6 +15,7 @@ import {
   createResumeStructureUserPrompt,
   RESUME_STRUCTURE_SYSTEM_PROMPT,
 } from './prompts/resume-structure.prompt';
+import { externalFetch } from '../common/http/external-http.client';
 
 type DeepseekChatResponse = {
   choices?: Array<{
@@ -45,10 +46,18 @@ export class DeepseekService {
   }
 
   // 调用 DeepSeek 优化结构化简历。JD 可选。
-  async optimizeResume(structuredResume: unknown, jobDescription?: string) {
+  async optimizeResume(
+    structuredResume: unknown,
+    jobDescription?: string,
+    additionalInstruction?: string,
+  ) {
     const content = await this.chatJson(
       RESUME_OPTIMIZE_SYSTEM_PROMPT,
-      createResumeOptimizeUserPrompt(structuredResume, jobDescription),
+      createResumeOptimizeUserPrompt(
+        structuredResume,
+        jobDescription,
+        additionalInstruction,
+      ),
     );
 
     return this.parseAndValidate(content, SaveOptimizedResumeDto, '优化稿结构');
@@ -86,8 +95,7 @@ export class DeepseekService {
 
   // 统一调用 DeepSeek JSON Output，结构化提取与优化共用同一套网络处理。
   private async chatJson(systemPrompt: string, userPrompt: string) {
-    const apiKey =
-      process.env.DEEPSEEK_API_KEY ?? process.env.Deepseek_API_KEY;
+    const apiKey = process.env.DEEPSEEK_API_KEY;
 
     if (!apiKey) {
       throw new InternalServerErrorException(
@@ -95,7 +103,10 @@ export class DeepseekService {
       );
     }
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+    const response = await externalFetch(`${this.baseUrl}/chat/completions`, {
+      serviceName: 'DeepSeek',
+      timeoutMs: Number(process.env.DEEPSEEK_TIMEOUT_MS ?? 60000),
+      userMessage: 'AI 服务繁忙，请稍后重试',
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -123,9 +134,7 @@ export class DeepseekService {
     const result = (await response.json()) as DeepseekChatResponse;
 
     if (!response.ok) {
-      throw new BadGatewayException(
-        `DeepSeek 请求失败：${result.error?.message ?? `HTTP ${response.status}`}`,
-      );
+      throw new BadGatewayException('AI 服务繁忙，请稍后重试');
     }
 
     const content = result.choices?.[0]?.message?.content;

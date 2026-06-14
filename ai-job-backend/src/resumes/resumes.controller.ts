@@ -3,12 +3,17 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
+  HttpCode,
   Param,
   ParseIntPipe,
   ParseFilePipeBuilder,
   Patch,
   Post,
   Put,
+  Query,
+  Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -18,20 +23,29 @@ import {
   ApiBody,
   ApiConsumes,
   ApiBearerAuth,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
+  ApiProduces,
   ApiTags,
 } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PaginationQueryDto } from '../common/pagination/pagination-query.dto';
+import { AnalyzeResumeMatchDto } from './dto/analyze-resume-match.dto';
 import { CreateResumeDto } from './dto/create-resume.dto';
+import { FinalizeResumeDto } from './dto/finalize-resume.dto';
 import { OptimizeResumeDto } from './dto/optimize-resume.dto';
 import { SaveOptimizedResumeDto } from './dto/save-optimized-resume.dto';
+import { SaveResumeDraftDto } from './dto/save-resume-draft.dto';
 import { SaveStructuredResumeDto } from './dto/save-structured-resume.dto';
 import { UpdateResumeDto } from './dto/update-resume.dto';
 import { ResumesService } from './resumes.service';
-import { normalizeUploadFilename } from './utils/normalize-upload-filename';
+import { normalizeResumePdfTemplate } from './pdf-templates';
+import { assertResumeFile } from './utils/validate-resume-upload';
 
 // 将简历接口归类到 Swagger 页面中的 resumes 分组。
 @ApiTags('resumes')
@@ -83,7 +97,7 @@ export class ResumesController {
   ) {
     // 仅返回元信息，用于确认后端已经正确收到文件。
     return {
-      originalName: normalizeUploadFilename(file.originalname),
+      originalName: assertResumeFile(file, 'preview'),
       mimeType: file.mimetype,
       size: file.size,
     };
@@ -124,7 +138,7 @@ export class ResumesController {
     )
     file: Express.Multer.File,
   ) {
-    const filename = normalizeUploadFilename(file.originalname);
+    const filename = assertResumeFile(file, 'parse');
     return this.resumesService.submitParseTask(user.id, id, file, filename);
   }
 
@@ -168,6 +182,35 @@ export class ResumesController {
     return this.resumesService.saveOptimizedContent(user.id, id, body);
   }
 
+  @Put(':id/draft-content')
+  @ApiOperation({ summary: '自动保存当前正在编辑的优化稿草稿' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  saveDraftContent(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: SaveResumeDraftDto,
+  ) {
+    return this.resumesService.saveDraftContent(user.id, id, body);
+  }
+
+  @Post(':id/finalize')
+  @ApiOperation({ summary: '将当前优化稿确认为最终版' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  finalizeResume(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: FinalizeResumeDto,
+  ) {
+    return this.resumesService.finalizeResume(user.id, id, body);
+  }
+
+  @Get(':id/versions')
+  @ApiOperation({ summary: '查询简历优化稿历史版本' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  findVersions(@CurrentUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
+    return this.resumesService.findVersions(user.id, id);
+  }
+
   // POST /resumes/:id/optimize 使用 DeepSeek 生成优化稿。
   // jobDescription 可选：不填时做通用优化，填写时做 JD 定向优化。
   @Post(':id/optimize')
@@ -178,14 +221,128 @@ export class ResumesController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: OptimizeResumeDto,
   ) {
-    return this.resumesService.optimizeWithAi(user.id, id, body.jobDescription);
+    return this.resumesService.optimizeWithAi(
+      user.id,
+      id,
+      body.jobDescription,
+      body.additionalInstruction,
+    );
+  }
+
+  @Post(':id/jd-match')
+  @ApiOperation({ summary: '计算简历与目标 JD 的真实匹配度，并返回缺失关键词和扣分原因' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  analyzeJdMatch(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: AnalyzeResumeMatchDto,
+  ) {
+    return this.resumesService.analyzeJdMatch(user.id, id, body.jobDescription);
+  }
+
+  // POST /resumes/:id/export/pdf 将当前优化稿打印成 PDF 文件。
+  @Post(':id/export/pdf')
+  @ApiOperation({ summary: '导出 PDF 简历，支持 classic / modern / sidebar 模板' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  @ApiQuery({
+    name: 'template',
+    required: false,
+    enum: ['classic', 'modern', 'sidebar', 'kendall', 'even'],
+    description:
+      'PDF 模板名称：classic=经典单栏，modern=现代卡片，sidebar=左侧栏，kendall=头像居中经典风，even=扁平清爽风。留空默认 classic。',
+    example: 'classic',
+  })
+  @ApiQuery({
+    name: 'versionId',
+    required: false,
+    description: '可选：指定历史优化稿版本 id；不传则导出当前最终版/优化稿/结构化简历',
+    example: 1,
+  })
+  @ApiProduces('application/pdf')
+  @HttpCode(200)
+  @ApiOkResponse({
+    description: '返回 PDF 文件',
+    content: {
+      'application/pdf': {
+        schema: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  async exportPdf(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Query('template') templateName: string | undefined,
+    @Query('versionId') versionIdValue: string | undefined,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const template = normalizeResumePdfTemplate(templateName);
+    const versionId = versionIdValue ? Number(versionIdValue) : undefined;
+    const pdf = await this.resumesService.exportPdf(user.id, id, template, versionId);
+
+    response.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="resume-${id}-${template}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+
+    return new StreamableFile(pdf);
+  }
+
+  @Get(':id/export/preview')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  @ApiOperation({ summary: '预览指定模板和版本的 HTML 简历效果' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  @ApiQuery({
+    name: 'template',
+    required: false,
+    enum: ['classic', 'modern', 'sidebar', 'kendall', 'even'],
+    description: '模板名称',
+    example: 'classic',
+  })
+  @ApiQuery({
+    name: 'versionId',
+    required: false,
+    description: '可选：指定历史优化稿版本 id',
+    example: 1,
+  })
+  previewPdfHtml(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Query('template') templateName: string | undefined,
+    @Query('versionId') versionIdValue: string | undefined,
+  ) {
+    const template = normalizeResumePdfTemplate(templateName);
+    const versionId = versionIdValue ? Number(versionIdValue) : undefined;
+    return this.resumesService.previewPdfHtml(user.id, id, template, versionId);
+  }
+
+  @Get(':id/exports')
+  @ApiOperation({ summary: '查询简历历史 PDF 导出记录' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  findExports(@CurrentUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
+    return this.resumesService.findExports(user.id, id);
+  }
+
+  @Delete(':id/exports/:exportId')
+  @ApiOperation({ summary: '删除某条 PDF 导出记录和本地缓存文件' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  @ApiParam({ name: 'exportId', description: '导出记录 id', example: 1 })
+  removeExport(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('exportId', ParseIntPipe) exportId: number,
+  ) {
+    return this.resumesService.removeExport(user.id, id, exportId);
   }
 
   // GET /resumes 类似前端进入简历管理页时加载列表。
   @Get()
   @ApiOperation({ summary: '查询简历列表' })
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.resumesService.findAll(user.id);
+  findAll(@CurrentUser() user: AuthUser, @Query() query: PaginationQueryDto) {
+    return this.resumesService.findAll(user.id, query);
   }
 
   // GET /resumes/:id 类似前端进入某份简历的编辑页。

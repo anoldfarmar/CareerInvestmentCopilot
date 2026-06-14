@@ -7,7 +7,7 @@ import { LinkStatusTag } from "../LinkStatusTag/LinkStatusTag";
 type LinkRecordCardProps = {
   record: LinkRecord;
   onEdit: (record: LinkRecord) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: number) => void;
 };
 
 export function LinkRecordCard({ record, onEdit, onDelete }: LinkRecordCardProps) {
@@ -15,19 +15,19 @@ export function LinkRecordCard({ record, onEdit, onDelete }: LinkRecordCardProps
     <article className="card page-stack">
       <div className="row">
         <div>
-          <strong>{record.companyName}</strong>
-          <p className="muted" style={{ margin: "5px 0 0" }}>
-            {record.jobTitle}
-          </p>
+          <strong>{record.title}</strong>
+          <p className="muted mt-1">{record.company || "未填写公司"}</p>
         </div>
         <LinkStatusTag status={record.status} />
       </div>
-      <a className="muted" href={record.url} target="_blank" rel="noreferrer">
-        {record.url}
-      </a>
-      {record.remark ? <p className="muted">{record.remark}</p> : null}
+      {record.sourceUrl ? (
+        <a className="muted" href={record.sourceUrl} target="_blank" rel="noreferrer">
+          {record.sourceUrl}
+        </a>
+      ) : null}
+      <p className="muted resume-markdown-viewer link-description-preview">{record.description}</p>
       <div className="row">
-        <span className="muted">更新于 {record.updatedAt}</span>
+        <span className="muted">更新于 {record.updatedAt.slice(0, 10)}</span>
         <span>
           <Button size="mini" fill="none" onClick={() => onEdit(record)}>
             编辑
