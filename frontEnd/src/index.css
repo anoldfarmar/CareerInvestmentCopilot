@@ -1,0 +1,137 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,300..600,0..1,-25..100&display=swap');
+@import "tailwindcss" source("./");
+
+@theme {
+  --font-sans: "Sora", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --spacing-safe: env(safe-area-inset-bottom);
+
+  /* Custom Color Palette (Objective Precision Scheme) */
+  --color-primary: #006a65;
+  --color-primary-container: #4ecdc4;
+  --color-on-primary-container: #00544f;
+  --color-on-primary: #ffffff;
+  --color-secondary: #0060ac;
+  --color-secondary-container: #64a8fe;
+  --color-on-secondary-container: #003c70;
+  --color-tertiary: #8f4e00;
+  --color-tertiary-container: #ffa654;
+  --color-on-tertiary-container: #723d00;
+  --color-background: #f8f9fa;
+  --color-surface-bg: #f8f9fa;
+  --color-surface-container-low: #f1f5f9;
+  --color-on-surface: #191c1d;
+  --color-on-surface-variant: #3d4948;
+  --color-inverse-surface: #2d3132;
+  --color-inverse-on-surface: #eff1f1;
+  --color-outline: #6c7a78;
+  --color-outline-variant: #bcc9c7;
+  --color-border-subtle: #e2e8f0;
+
+  /* Heatmap Colors */
+  --color-heatmap-0: #ebedf0;
+  --color-heatmap-1: #c6f2ef;
+  --color-heatmap-2: #8aded8;
+  --color-heatmap-3: #4ecdc4;
+  --color-heatmap-4: #3ba39c;
+}
+
+@layer base {
+  html {
+    min-height: 100%;
+    background: #eef3f3;
+  }
+
+  body {
+    min-height: 100vh;
+    margin: 0;
+    font-family: var(--font-sans);
+    background-color: #eef3f3;
+    color: var(--color-on-surface);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    min-height: 100vh;
+    max-width: 28rem;
+    margin: 0 auto;
+    background-color: var(--color-background);
+    position: relative;
+    overflow-x: hidden;
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.04);
+  }
+}
+
+@layer utilities {
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined';
+    font-weight: normal;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .filled-icon {
+    font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+
+  .light-icon {
+    font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+  }
+
+  .todo-checked {
+    text-decoration: line-through;
+    opacity: 0.4;
+    transition: all 0.3s ease;
+  }
+
+  /* Scrollbar removal utilities */
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Custom micro-animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pulseBorder {
+  0% {
+    border-color: var(--color-outline-variant);
+  }
+  50% {
+    border-color: var(--color-primary-container);
+  }
+  100% {
+    border-color: var(--color-outline-variant);
+  }
+}
+
+.animate-pulse-border {
+  animation: pulseBorder 2s infinite ease-in-out;
+}
