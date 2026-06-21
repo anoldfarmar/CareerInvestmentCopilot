@@ -174,6 +174,37 @@ const BOSS_SOURCE = 'BOSS直聘';
 const BOSS_RESULT_RATIO = 0.2;
 const TAVILY_MAX_QUERY_LENGTH = 390;
 
+const JOB_DETAIL_URL_PATTERNS = [
+  /jobs\.bytedance\.com\/(?:campus\/)?m?\/?position\/detail\/\d+/i,
+  /careers\.tencent\.com\/(?:jobdesc|jobdetail)\.html/i,
+  /careers\.tencent\.com\/job\/\d+/i,
+  /m\.liepin\.com\/lptjob\/\d+/i,
+  /liepin\.com\/job\/\d+/i,
+  /zhipin\.com\/job_detail\//i,
+  /shixiseng\.com\/intern\//i,
+  /nowcoder\.com\/jobs\/detail\//i,
+  /zhaopin\.com\/jobdetail\//i,
+  /jobs\.zhaopin\.com\//i,
+  /51job\.com\/(?:job|jobs)\//i,
+  /lagou\.com\/jobs\/\d+/i,
+  /yingjiesheng\.com\/job-\d+/i,
+];
+
+const RECRUITMENT_LANDING_URL_PATTERNS = [
+  /jobs\.bytedance\.com\/(?:campus|society|experienced|talent)(?:\/(?:m|pc))?\/?$/i,
+  /jobs\.bytedance\.com\/campus\/?$/i,
+  /careers\.tencent\.com\/campusrecruit\.html$/i,
+  /careers\.tencent\.com\/search\.html$/i,
+  /campus\.alibaba\.com\/?$/i,
+  /talent\.baidu\.com\/?$/i,
+  /hr\.xiaomi\.com\/?$/i,
+  /campus\.meituan\.com\/?$/i,
+  /campus\.jd\.com\/?$/i,
+  /career\.huawei\.com\/?$/i,
+];
+
+const CONCRETE_JOB_TEXT_PATTERN = /(实习生|实习|校招|招聘|工程师|开发|算法|产品|运营|分析|测试|SRE|后端|前端|大模型|Agent|LLM|数据)/i;
+
 @Injectable()
 export class JobRecommendationService {
   private readonly logger = new Logger(JobRecommendationService.name);
@@ -367,6 +398,7 @@ export class JobRecommendationService {
     const payload = (await response.json()) as { results?: TavilyResult[] };
     return (payload.results ?? [])
       .filter((item) => item.title && item.url)
+      .filter((item) => this.isConcreteJobResult(item.title ?? '', item.url ?? '', item.content ?? ''))
       .map((item) => {
         const title = item.title ?? '';
         const url = item.url ?? '';
@@ -536,6 +568,36 @@ export class JobRecommendationService {
   private inferSource(url: string, groupName: string) {
     const matched = SOURCE_LABELS.find(([pattern]) => pattern.test(url));
     return matched?.[1] ?? SOURCE_GROUPS.find((item) => item.name === groupName)?.label ?? '公开网页';
+  }
+
+  private isConcreteJobResult(title: string, url: string, summary: string) {
+    if (this.isRecruitmentLandingPage(url)) return false;
+    if (JOB_DETAIL_URL_PATTERNS.some((pattern) => pattern.test(url))) return true;
+
+    const text = `${title} ${summary}`;
+    if (!CONCRETE_JOB_TEXT_PATTERN.test(text)) return false;
+
+    try {
+      const parsed = new URL(url);
+      const path = parsed.pathname.toLowerCase();
+      const hasDetailKeyword = /(job|position|detail|intern|campus|recruit|lptjob)/i.test(path);
+      const hasIdLikePath = /(?:^|\/)[a-z0-9_-]*\d{5,}[a-z0-9_-]*(?:\/|$)/i.test(path);
+      return hasDetailKeyword && hasIdLikePath;
+    } catch {
+      return false;
+    }
+  }
+
+  private isRecruitmentLandingPage(url: string) {
+    try {
+      const parsed = new URL(url);
+      parsed.hash = '';
+      parsed.search = '';
+      const normalized = parsed.toString().replace(/\/$/, '');
+      return RECRUITMENT_LANDING_URL_PATTERNS.some((pattern) => pattern.test(normalized));
+    } catch {
+      return RECRUITMENT_LANDING_URL_PATTERNS.some((pattern) => pattern.test(url));
+    }
   }
 
   private getTavilyApiKey() {

@@ -37,9 +37,27 @@ describe('JobRecommendationService', () => {
         results: [
           {
             title: '腾讯 数据分析 实习生',
-            url: 'https://careers.tencent.com/job/1?from=a',
+            url: 'https://careers.tencent.com/jobdesc.html?postId=123456',
             content: '负责 SQL Python 数据分析，支持业务指标。',
             score: 0.99,
+          },
+          {
+            title: '字节跳动校园招聘',
+            url: 'https://jobs.bytedance.com/campus',
+            content: '字节跳动校园招聘入口，查看全部岗位。',
+            score: 0.98,
+          },
+          {
+            title: '腾讯校园招聘',
+            url: 'https://careers.tencent.com/campusrecruit.html',
+            content: '腾讯校园招聘首页。',
+            score: 0.97,
+          },
+          {
+            title: '大模型算法实习生（AI Agent方向）-TikTok隐私安全- 加入字节跳动',
+            url: 'https://jobs.bytedance.com/campus/m/position/detail/7617786273006717189?recomId=test',
+            content: '专注大模型领域，关注智能交互、文本生成以及核心 NLP 算法模型。',
+            score: 0.96,
           },
           {
             title: '数据分析 实习生',
@@ -87,6 +105,20 @@ describe('JobRecommendationService', () => {
     );
     expect(result.sourceStats).toEqual(expect.objectContaining({ 腾讯招聘: 1, 实习僧: 1 }));
     expect(result.recommendations.filter((item) => item.source === '实习僧')).toHaveLength(1);
+    expect(result.recommendations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: '字节招聘',
+          url: expect.stringContaining('/position/detail/'),
+        }),
+      ]),
+    );
+    expect(result.recommendations).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({ url: 'https://jobs.bytedance.com/campus' }),
+        expect.objectContaining({ url: 'https://careers.tencent.com/campusrecruit.html' }),
+      ]),
+    );
     expect(fetchMock).toHaveBeenCalled();
   });
 });
