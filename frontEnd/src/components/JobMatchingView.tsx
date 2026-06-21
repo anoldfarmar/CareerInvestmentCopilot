@@ -41,6 +41,16 @@ function modeMeta(mode: "fast" | "standard" | "broad") {
   return { label: "标准", count: 18 };
 }
 
+function readableUrl(value?: string) {
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    return `${parsed.hostname}${parsed.pathname}`.replace(/\/$/, "");
+  } catch {
+    return value;
+  }
+}
+
 export default function JobMatchingView({
   jobs,
   onJobSaved,
@@ -296,6 +306,13 @@ export default function JobMatchingView({
                   <p className="font-sans text-xs text-on-surface-variant leading-relaxed line-clamp-3">
                     {item.summary || item.tierReason}
                   </p>
+                  <button
+                    onClick={() => window.open(item.url, "_blank", "noopener,noreferrer")}
+                    className="flex w-full items-center gap-1 rounded-lg bg-surface-container-low px-2 py-1.5 text-left text-[11px] font-semibold text-primary active:scale-98 transition-transform"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">link</span>
+                    <span className="min-w-0 flex-1 truncate">{readableUrl(item.url)}</span>
+                  </button>
                   <p className="text-[11px] text-primary leading-relaxed">{item.tierReason}</p>
                   <div className="grid grid-cols-3 gap-2">
                     <button
@@ -418,6 +435,15 @@ export default function JobMatchingView({
                   {isSelected && (
                     <div className="mt-4 pt-4 border-t border-dashed border-border-subtle animate-fade-in-up space-y-3">
                       <p className="text-xs font-bold text-primary font-mono">岗位类型: {job.tag}</p>
+                      {job.sourceUrl && (
+                        <button
+                          onClick={() => window.open(job.sourceUrl, "_blank", "noopener,noreferrer")}
+                          className="flex w-full items-center gap-1 rounded-lg bg-surface-container-low px-2 py-1.5 text-left text-[11px] font-semibold text-primary active:scale-98 transition-transform"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">link</span>
+                          <span className="min-w-0 flex-1 truncate">{readableUrl(job.sourceUrl)}</span>
+                        </button>
+                      )}
                       <div className="flex gap-2">
                         {job.sourceUrl && (
                           <button
