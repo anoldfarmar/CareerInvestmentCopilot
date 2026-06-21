@@ -81,6 +81,7 @@ export interface Job {
   logoUrl: string;
   logoAlt?: string;
   description: string;
+  sourceUrl?: string;
   matchScore: number;
   tag: string;
 }

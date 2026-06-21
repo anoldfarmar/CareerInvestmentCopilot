@@ -383,6 +383,9 @@ export default function App() {
         return (
           <JobMatchingView
             jobs={jobs}
+            onJobSaved={(job) => {
+              setJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
+            }}
             onNavigate={(v) => {
               setCurrentView(v);
               if (["workbench", "matching", "knowledge", "profile"].includes(v)) {

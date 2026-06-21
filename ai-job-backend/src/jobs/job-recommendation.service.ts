@@ -8,6 +8,7 @@ import { RecommendJobsDto } from './dto/recommend-jobs.dto';
 
 type SourceGroup = {
   name: string;
+  label: string;
   domains: string[];
   keywords: string[];
 };
@@ -49,6 +50,7 @@ type Candidate = {
 const SOURCE_GROUPS: SourceGroup[] = [
   {
     name: 'campus',
+    label: '实习校招平台',
     domains: [
       'site:shixiseng.com',
       'site:yingjiesheng.com',
@@ -61,11 +63,13 @@ const SOURCE_GROUPS: SourceGroup[] = [
   },
   {
     name: 'general',
+    label: '通用招聘平台',
     domains: ['site:zhipin.com', 'site:zhaopin.com', 'site:51job.com', 'site:liepin.com', 'site:lagou.com'],
     keywords: ['招聘', '岗位', '职位', '实习'],
   },
   {
     name: 'company',
+    label: '公司官网',
     domains: [
       'site:careers.tencent.com',
       'site:jobs.bytedance.com',
@@ -121,15 +125,53 @@ const ROLE_EXPANSIONS: Record<string, string[]> = {
 
 const SOURCE_LABELS: Array<[RegExp, string]> = [
   [/shixiseng\.com/i, '实习僧'],
+  [/xiaoyuan\.zhaopin\.com/i, '智联校园'],
+  [/campus\.51job\.com/i, '前程无忧校园'],
+  [/campus\.lagou\.com/i, '拉勾校招'],
   [/nowcoder\.com/i, '牛客'],
   [/yingjiesheng\.com/i, '应届生求职网'],
   [/zhipin\.com/i, 'BOSS直聘'],
-  [/zhaopin\.com|xiaoyuan\.zhaopin\.com/i, '智联招聘'],
-  [/51job\.com|campus\.51job\.com/i, '前程无忧'],
+  [/zhaopin\.com/i, '智联招聘'],
+  [/51job\.com/i, '前程无忧'],
   [/lagou\.com/i, '拉勾'],
   [/liepin\.com/i, '猎聘'],
-  [/tencent|bytedance|alibaba|baidu|xiaomi|meituan|jd\.com|huawei|kuaishou|163\.com/i, '企业官网'],
+  [/careers\.tencent\.com/i, '腾讯招聘'],
+  [/jobs\.bytedance\.com/i, '字节招聘'],
+  [/campus\.alibaba\.com/i, '阿里校园'],
+  [/talent\.baidu\.com/i, '百度招聘'],
+  [/hr\.xiaomi\.com/i, '小米招聘'],
+  [/campus\.meituan\.com/i, '美团校园'],
+  [/campus\.jd\.com/i, '京东校园'],
+  [/campus\.163\.com/i, '网易校园'],
+  [/career\.huawei\.com/i, '华为招聘'],
+  [/zhaopin\.kuaishou\.cn/i, '快手招聘'],
 ];
+
+const PREFERRED_SOURCE_ORDER = [
+  '腾讯招聘',
+  '字节招聘',
+  '阿里校园',
+  '百度招聘',
+  '小米招聘',
+  '美团校园',
+  '京东校园',
+  '网易校园',
+  '华为招聘',
+  '快手招聘',
+  '实习僧',
+  '牛客',
+  '应届生求职网',
+  '智联校园',
+  '前程无忧校园',
+  '智联招聘',
+  '前程无忧',
+  '拉勾',
+  '拉勾校招',
+  '猎聘',
+];
+
+const BOSS_SOURCE = 'BOSS直聘';
+const BOSS_RESULT_RATIO = 0.2;
 
 @Injectable()
 export class JobRecommendationService {
@@ -154,6 +196,7 @@ export class JobRecommendationService {
       generatedAt: new Date().toISOString(),
       intent,
       total: recommendations.length,
+      sourceStats: this.buildSourceStats(recommendations),
       recommendations: recommendations.map((item, index) => ({
         index: index + 1,
         title: item.title,
@@ -328,8 +371,8 @@ export class JobRecommendationService {
         const title = item.title ?? '';
         const url = item.url ?? '';
         const summary = this.clipText(item.content ?? '', 280);
-        const source = this.inferSource(url);
-        const tier = this.classifyResult(title, summary, plan.groupName);
+        const source = this.inferSource(url, plan.groupName);
+        const tier = this.classifyResult(title, summary, source);
 
         return {
           title: this.clipText(title, 120),
@@ -347,12 +390,20 @@ export class JobRecommendationService {
 
   private prepareResults(candidates: Candidate[], maxResults: number) {
     const deduped = new Map<string, Candidate>();
+    const seenWeakKeys = new Set<string>();
 
     for (const candidate of candidates) {
-      const key = this.normalizeUrl(candidate.url);
+      const titleKey = this.normalizeComparableText(candidate.title).slice(0, 80);
+      const weakKey = `${candidate.source}:${titleKey}`;
+      if (seenWeakKeys.has(weakKey)) continue;
+
+      const key =
+        this.normalizeUrl(candidate.url) ||
+        `${weakKey}:${this.normalizeComparableText(candidate.summary).slice(0, 80)}`;
       const current = deduped.get(key);
       if (!current || candidate.score > current.score) {
         deduped.set(key, candidate);
+        seenWeakKeys.add(weakKey);
       }
     }
 
@@ -368,16 +419,28 @@ export class JobRecommendationService {
   private balanceByPlatform(candidates: Candidate[], maxResults: number) {
     const buckets = new Map<string, Candidate[]>();
     for (const candidate of candidates) {
-      const key = candidate.sourceKey;
+      const key = candidate.source;
       buckets.set(key, [...(buckets.get(key) ?? []), candidate]);
     }
 
+    const bossItems = buckets.get(BOSS_SOURCE) ?? [];
+    buckets.delete(BOSS_SOURCE);
+
+    const capped = new Map<string, Candidate[]>();
+    for (const [source, items] of buckets) {
+      capped.set(source, items.slice(0, this.sourceQuota(source, maxResults)));
+    }
+
     const output: Candidate[] = [];
-    const keys = [...buckets.keys()];
+    const keys = [
+      ...PREFERRED_SOURCE_ORDER.filter((source) => capped.has(source)),
+      ...[...capped.keys()].filter((source) => !PREFERRED_SOURCE_ORDER.includes(source)),
+    ];
+
     while (output.length < maxResults && keys.length > 0) {
       let progressed = false;
       for (const key of keys) {
-        const item = buckets.get(key)?.shift();
+        const item = capped.get(key)?.shift();
         if (item) {
           output.push(item);
           progressed = true;
@@ -387,22 +450,63 @@ export class JobRecommendationService {
       if (!progressed) break;
     }
 
-    return output;
+    const bossCap = Math.max(1, Math.floor(maxResults * BOSS_RESULT_RATIO));
+    output.push(...bossItems.slice(0, bossCap));
+    return output.slice(0, maxResults);
   }
 
-  private classifyResult(title: string, summary: string, groupName: string) {
-    const text = `${title} ${summary}`;
-    const strong = /(数据分析|商业分析|数据产品|大模型|LLM|Agent|RAG|AI 应用|机器学习|算法|Python|SQL)/i.test(text);
-    const campus = /(实习|校招|应届|校园招聘|暑期)/i.test(text);
-    const company = groupName === 'company';
+  private classifyResult(title: string, summary: string, source: string) {
+    const text = `${title} ${summary} ${source}`.toLowerCase();
+    const rejectWords = ['销售', '电销', '客服', '审核', '博士', '社招', '全职'];
+    if (rejectWords.some((word) => text.includes(word.toLowerCase()))) {
+      return { tier: '不建议', reason: '岗位职责或硬性要求与当前实习目标偏离较大。' };
+    }
 
-    if (strong && (campus || company)) {
-      return { tier: '主投岗', reason: '岗位方向、技能关键词和招聘类型都较贴合当前求职画像。' };
+    const bigCompanyWords = [
+      '腾讯',
+      '字节',
+      '阿里',
+      '百度',
+      '小米',
+      '美团',
+      '京东',
+      '网易',
+      '快手',
+      '华为',
+      'microsoft',
+      'amazon',
+      'sap',
+      'ibm',
+    ];
+    if (bigCompanyWords.some((word) => text.includes(word.toLowerCase()))) {
+      return { tier: '冲刺岗', reason: '公司或岗位要求较高，适合少量冲刺投递。' };
     }
-    if (strong || campus || company) {
-      return { tier: '备选岗', reason: '具备部分方向或平台匹配度，可进一步查看 JD 细节。' };
+
+    const mainWords = [
+      '数据分析',
+      '商业分析',
+      '数据运营',
+      '数据产品',
+      'sql',
+      'python',
+      'bi',
+      'tableau',
+      'power bi',
+      '机器学习',
+      '大模型',
+      'llm',
+      'agent',
+      'rag',
+      'prompt',
+      'ai',
+      '实习',
+    ];
+    const matchCount = mainWords.filter((word) => text.includes(word.toLowerCase())).length;
+    if (matchCount >= 2) {
+      return { tier: '主投岗', reason: '方向与目标较接近，适合作为重点候选。' };
     }
-    return { tier: '观察岗', reason: '公开页面相关度较弱，建议只作为信息补充。' };
+
+    return { tier: '保底岗', reason: '岗位要求可能相对宽泛，可作为扩大机会的候选。' };
   }
 
   private inferRoles(texts: string[]) {
@@ -429,9 +533,9 @@ export class JobRecommendationService {
     return skills.length ? skills.slice(0, 8) : ['Python', 'SQL', 'LLM', 'Agent'];
   }
 
-  private inferSource(url: string) {
+  private inferSource(url: string, groupName: string) {
     const matched = SOURCE_LABELS.find(([pattern]) => pattern.test(url));
-    return matched?.[1] ?? '公开网页';
+    return matched?.[1] ?? SOURCE_GROUPS.find((item) => item.name === groupName)?.label ?? '公开网页';
   }
 
   private getTavilyApiKey() {
@@ -445,7 +549,7 @@ export class JobRecommendationService {
   private getExpEnv() {
     if (this.cachedExpEnv) return this.cachedExpEnv;
 
-    const envPath = resolve(process.cwd(), 'exp/.env');
+    const envPath = resolve(process.cwd(), 'exp-jobRecommendation/.env');
     try {
       const content = readFileSync(envPath, 'utf8');
       this.cachedExpEnv = Object.fromEntries(
@@ -499,10 +603,38 @@ export class JobRecommendationService {
   }
 
   private tierWeight(tier: string) {
-    return tier === '主投岗' ? 3 : tier === '备选岗' ? 2 : 1;
+    if (tier === '冲刺岗') return 4;
+    if (tier === '主投岗') return 3;
+    if (tier === '保底岗') return 2;
+    if (tier === '不建议') return 0;
+    return 1;
   }
 
   private clipText(value: string, maxLength: number) {
-    return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+    const cleaned = value.replace(/\s+/g, ' ').trim();
+    return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength - 1)}…` : cleaned;
+  }
+
+  private normalizeComparableText(value: string) {
+    return value.toLowerCase().replace(/\s+/g, '');
+  }
+
+  private buildSourceStats(results: Candidate[]) {
+    const stats = new Map<string, number>();
+    for (const result of results) {
+      stats.set(result.source, (stats.get(result.source) ?? 0) + 1);
+    }
+    return Object.fromEntries([...stats.entries()].sort((left, right) => right[1] - left[1]));
+  }
+
+  private sourceQuota(source: string, maxResults: number) {
+    if (source === BOSS_SOURCE) return Math.max(1, Math.floor(maxResults * BOSS_RESULT_RATIO));
+    if (['腾讯招聘', '字节招聘', '阿里校园', '百度招聘', '小米招聘', '美团校园', '京东校园', '网易校园', '华为招聘', '快手招聘'].includes(source)) {
+      return Math.max(3, Math.floor(maxResults / 6));
+    }
+    if (['实习僧', '牛客', '应届生求职网', '智联校园', '前程无忧校园'].includes(source)) {
+      return Math.max(4, Math.floor(maxResults / 7));
+    }
+    return Math.max(3, Math.floor(maxResults / 8));
   }
 }

@@ -12,7 +12,7 @@ interface BackendLoginResult {
   accessToken: string;
 }
 
-interface BackendJob {
+export interface BackendJob {
   id: number;
   title: string;
   company: string;
@@ -45,6 +45,7 @@ export interface BackendJobRecommendationResult {
     profile: string;
   };
   total: number;
+  sourceStats?: Record<string, number>;
   recommendations: BackendJobRecommendation[];
 }
 
@@ -451,6 +452,7 @@ export function mapBackendJob(job: BackendJob): Job {
     logoUrl: "",
     logoAlt: job.company,
     description: job.description ?? "暂无岗位描述",
+    sourceUrl: job.sourceUrl ?? undefined,
     matchScore: statusToScore(job.status),
     tag: job.tags?.[0] ?? statusToLabel(job.status),
   };
