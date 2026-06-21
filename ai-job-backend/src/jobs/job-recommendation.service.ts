@@ -172,6 +172,7 @@ const PREFERRED_SOURCE_ORDER = [
 
 const BOSS_SOURCE = 'BOSS直聘';
 const BOSS_RESULT_RATIO = 0.2;
+const TAVILY_MAX_QUERY_LENGTH = 390;
 
 @Injectable()
 export class JobRecommendationService {
@@ -283,7 +284,7 @@ export class JobRecommendationService {
             groupName: target.groupName,
             sourceKey: target.key,
             quota: target.quota,
-            query: [site, variant, keywords, baseQuery].filter(Boolean).join(' '),
+            query: this.compactSearchQuery([site, variant, keywords, baseQuery]),
           });
         }
       }
@@ -302,8 +303,7 @@ export class JobRecommendationService {
     const roleText = intent.targetRoles.slice(0, 4).join(' OR ');
     const cityText = intent.cities.slice(0, 5).join(' OR ');
     const skillText = intent.skills.slice(0, 8).join(' ');
-    const profileText = this.clipText(intent.profile, 300);
-    return [roleText, cityText, skillText, intent.availability, profileText].filter(Boolean).join(' ');
+    return [roleText, cityText, skillText, intent.availability].filter(Boolean).join(' ');
   }
 
   private buildQueryVariants(targetRoles: string[], skills: string[]) {
@@ -613,6 +613,26 @@ export class JobRecommendationService {
   private clipText(value: string, maxLength: number) {
     const cleaned = value.replace(/\s+/g, ' ').trim();
     return cleaned.length > maxLength ? `${cleaned.slice(0, maxLength - 1)}…` : cleaned;
+  }
+
+  private compactSearchQuery(parts: string[]) {
+    const tokens = parts
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(Boolean);
+    const output: string[] = [];
+    let length = 0;
+
+    for (const token of tokens) {
+      const nextLength = length + token.length + (output.length ? 1 : 0);
+      if (nextLength > TAVILY_MAX_QUERY_LENGTH) break;
+      output.push(token);
+      length = nextLength;
+    }
+
+    return output.join(' ');
   }
 
   private normalizeComparableText(value: string) {
