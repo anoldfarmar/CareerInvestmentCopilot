@@ -34,6 +34,7 @@ export default function WorkbenchView({
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
 
   const monthLabel = getMonthLabel(visibleMonth.month);
+  const todayDateKey = toDateKey(today.getFullYear(), today.getMonth(), today.getDate());
   const monthActivityLevel = useMemo(() => {
     if (visibleMonth.year === today.getFullYear() && visibleMonth.month === today.getMonth()) {
       return todayActivityLevel;
@@ -66,6 +67,14 @@ export default function WorkbenchView({
         month: next.getMonth(),
       };
     });
+  };
+
+  const jumpToToday = () => {
+    setVisibleMonth({
+      year: today.getFullYear(),
+      month: today.getMonth(),
+    });
+    setActiveTooltip(todayDateKey);
   };
 
   const getHeatmapColorClass = (level: number) => {
@@ -114,7 +123,7 @@ export default function WorkbenchView({
             </h2>
             <span className="text-[10px] font-mono text-outline font-medium">Lvl. {monthActivityLevel} Active</span>
           </div>
-          <div className="bg-white border border-border-subtle p-4 rounded-xl shadow-sm relative">
+          <div className="bg-white border border-border-subtle p-4 pb-14 rounded-xl shadow-sm relative">
             <div className="flex justify-between items-center mb-3">
               <div>
                 <p className="font-mono text-[10px] font-bold text-outline">{visibleMonth.year}</p>
@@ -159,6 +168,8 @@ export default function WorkbenchView({
                   );
                 }
 
+                const isToday = cell.date === todayDateKey;
+
                 return (
                   <div
                     key={cell.date}
@@ -167,9 +178,12 @@ export default function WorkbenchView({
                     onClick={() => setActiveTooltip(cell.date)}
                     className={`w-full aspect-square rounded-[3px] flex items-center justify-center text-[10px] transition-all cursor-pointer relative ${getHeatmapColorClass(
                       cell.level
-                    )}`}
+                    )} ${isToday ? "ring-2 ring-primary ring-offset-2 ring-offset-white shadow-sm font-bold" : ""}`}
                   >
                     {cell.day}
+                    {isToday && (
+                      <span className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-primary" />
+                    )}
                     {/* Custom Tonal Tooltip */}
                     {activeTooltip === cell.date && (
                       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-32 bg-inverse-surface text-inverse-on-surface text-[10px] rounded p-2 z-50 shadow-lg pointer-events-none text-center">
@@ -184,6 +198,13 @@ export default function WorkbenchView({
                 );
               })}
             </div>
+            <button
+              aria-label="定位到今天"
+              onClick={jumpToToday}
+              className="absolute bottom-4 right-4 h-9 w-9 rounded-lg bg-primary text-white shadow-sm flex items-center justify-center active:scale-95 hover:bg-on-primary-container transition-all"
+            >
+              <span className="material-symbols-outlined text-[18px]">today</span>
+            </button>
           </div>
         </section>
 
