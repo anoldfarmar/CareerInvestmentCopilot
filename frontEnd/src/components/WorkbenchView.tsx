@@ -149,8 +149,17 @@ export default function WorkbenchView({
                   {w}
                 </div>
               ))}
-              {heatmapCells.map((cell, index) => (
-                cell ? (
+              {heatmapCells.map((cell, index) => {
+                if (!cell) {
+                  return (
+                    <div
+                      key={`blank-${visibleMonth.year}-${visibleMonth.month}-${index}`}
+                      className="w-full aspect-square"
+                    />
+                  );
+                }
+
+                return (
                   <div
                     key={cell.date}
                     onMouseEnter={() => setActiveTooltip(cell.date)}
@@ -172,10 +181,8 @@ export default function WorkbenchView({
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div key={`blank-${visibleMonth.year}-${visibleMonth.month}-${index}`} className="w-full aspect-square" />
-                  )}
-              ))}
+                );
+              })}
             </div>
           </div>
         </section>
