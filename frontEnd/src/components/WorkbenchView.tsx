@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { ActivityDay, Todo } from "../types";
 
 interface WorkbenchViewProps {
@@ -26,25 +26,47 @@ export default function WorkbenchView({
   onNavigate,
   onSelectActionJob,
 }: WorkbenchViewProps) {
-  const [activeTooltip, setActiveTooltip] = useState<number | null>(null);
+  const today = useMemo(() => new Date(), []);
+  const [visibleMonth, setVisibleMonth] = useState(() => ({
+    year: today.getFullYear(),
+    month: today.getMonth(),
+  }));
+  const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
 
-  const heatmapData =
-    activityDays.length > 0
-      ? activityDays
-      : Array.from({ length: 28 }, (_, index) => {
-          const day = index + 1;
-          const isToday = day === 24;
+  const monthLabel = getMonthLabel(visibleMonth.month);
+  const monthActivityLevel = useMemo(() => {
+    if (visibleMonth.year === today.getFullYear() && visibleMonth.month === today.getMonth()) {
+      return todayActivityLevel;
+    }
 
-          return {
-            date: `2026-06-${String(day).padStart(2, "0")}`,
-            day,
-            applicationCount: 0,
-            audioUploadCount: 0,
-            mockInterviewCount: 0,
-            totalCount: isToday ? todayActivityCount : 0,
-            level: isToday ? todayActivityLevel : 0,
-          };
-        });
+    return activityDays
+      .filter((item) => isSameMonth(item.date, visibleMonth.year, visibleMonth.month))
+      .reduce((maxLevel, item) => Math.max(maxLevel, item.level), 0);
+  }, [activityDays, today, todayActivityLevel, visibleMonth]);
+
+  const heatmapCells = useMemo(
+    () =>
+      buildMonthCells({
+        year: visibleMonth.year,
+        month: visibleMonth.month,
+        activityDays,
+        todayActivityCount,
+        todayActivityLevel,
+        today,
+      }),
+    [activityDays, today, todayActivityCount, todayActivityLevel, visibleMonth],
+  );
+
+  const shiftVisibleMonth = (offset: number) => {
+    setVisibleMonth((current) => {
+      const next = new Date(current.year, current.month + offset, 1);
+      setActiveTooltip(null);
+      return {
+        year: next.getFullYear(),
+        month: next.getMonth(),
+      };
+    });
+  };
 
   const getHeatmapColorClass = (level: number) => {
     switch (level) {
@@ -90,18 +112,33 @@ export default function WorkbenchView({
             <h2 className="font-mono text-xs font-semibold text-on-surface-variant uppercase tracking-wider">
               投递热力图 / ACTIVITY
             </h2>
-            <span className="text-[10px] font-mono text-outline font-medium">Lvl. {todayActivityLevel} Active</span>
+            <span className="text-[10px] font-mono text-outline font-medium">Lvl. {monthActivityLevel} Active</span>
           </div>
           <div className="bg-white border border-border-subtle p-4 rounded-xl shadow-sm relative">
             <div className="flex justify-between items-center mb-3">
-              <h3 className="font-sans text-base font-bold text-primary">六月 / JUNE</h3>
+              <div>
+                <p className="font-mono text-[10px] font-bold text-outline">{visibleMonth.year}</p>
+                <h3 className="font-sans text-base font-bold text-primary">{monthLabel}</h3>
+              </div>
               <div className="flex gap-1">
-                <span className="material-symbols-outlined text-outline-variant cursor-pointer text-lg hover:text-primary">
+                <button
+                  aria-label="查看上个月"
+                  onClick={() => shiftVisibleMonth(-1)}
+                  className="w-7 h-7 flex items-center justify-center rounded-full text-outline-variant hover:bg-surface-container-low hover:text-primary active:scale-95 transition-all"
+                >
+                  <span className="material-symbols-outlined text-lg">
                   keyboard_arrow_up
-                </span>
-                <span className="material-symbols-outlined text-outline-variant cursor-pointer text-lg hover:text-primary">
+                  </span>
+                </button>
+                <button
+                  aria-label="查看下个月"
+                  onClick={() => shiftVisibleMonth(1)}
+                  className="w-7 h-7 flex items-center justify-center rounded-full text-outline-variant hover:bg-surface-container-low hover:text-primary active:scale-95 transition-all"
+                >
+                  <span className="material-symbols-outlined text-lg">
                   keyboard_arrow_down
-                </span>
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -112,28 +149,32 @@ export default function WorkbenchView({
                   {w}
                 </div>
               ))}
-              {heatmapData.map((item) => (
-                <div
-                  key={item.day}
-                  onMouseEnter={() => setActiveTooltip(item.day)}
-                  onMouseLeave={() => setActiveTooltip(null)}
-                  onClick={() => setActiveTooltip(item.day)}
-                  className={`w-full aspect-square rounded-[3px] flex items-center justify-center text-[10px] transition-all cursor-pointer relative ${getHeatmapColorClass(
-                    item.level
-                  )}`}
-                >
-                  {item.day}
-                  {/* Custom Tonal Tooltip */}
-                  {activeTooltip === item.day && (
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-28 bg-inverse-surface text-inverse-on-surface text-[10px] rounded p-2 z-50 shadow-lg pointer-events-none text-center">
-                      <p className="font-mono font-bold text-primary-container">6月{item.day}日</p>
-                      <p className="font-sans">投递 <b>{item.applicationCount}</b> 次</p>
-                      <p className="font-sans">上传录音 <b>{item.audioUploadCount}</b> 次</p>
-                      <p className="font-sans">模拟面试 <b>{item.mockInterviewCount}</b> 次</p>
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 w-2 h-2 bg-inverse-surface rotate-45 -mt-1"></div>
-                    </div>
+              {heatmapCells.map((cell, index) => (
+                cell ? (
+                  <div
+                    key={cell.date}
+                    onMouseEnter={() => setActiveTooltip(cell.date)}
+                    onMouseLeave={() => setActiveTooltip(null)}
+                    onClick={() => setActiveTooltip(cell.date)}
+                    className={`w-full aspect-square rounded-[3px] flex items-center justify-center text-[10px] transition-all cursor-pointer relative ${getHeatmapColorClass(
+                      cell.level
+                    )}`}
+                  >
+                    {cell.day}
+                    {/* Custom Tonal Tooltip */}
+                    {activeTooltip === cell.date && (
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-32 bg-inverse-surface text-inverse-on-surface text-[10px] rounded p-2 z-50 shadow-lg pointer-events-none text-center">
+                        <p className="font-mono font-bold text-primary-container">{formatTooltipDate(cell.date)}</p>
+                        <p className="font-sans">投递 <b>{cell.applicationCount}</b> 次</p>
+                        <p className="font-sans">上传录音 <b>{cell.audioUploadCount}</b> 次</p>
+                        <p className="font-sans">模拟面试 <b>{cell.mockInterviewCount}</b> 次</p>
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 w-2 h-2 bg-inverse-surface rotate-45 -mt-1"></div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div key={`blank-${visibleMonth.year}-${visibleMonth.month}-${index}`} className="w-full aspect-square" />
                   )}
-                </div>
               ))}
             </div>
           </div>
@@ -259,4 +300,79 @@ export default function WorkbenchView({
       </main>
     </div>
   );
+}
+
+const MONTH_LABELS = [
+  ["一月", "JANUARY"],
+  ["二月", "FEBRUARY"],
+  ["三月", "MARCH"],
+  ["四月", "APRIL"],
+  ["五月", "MAY"],
+  ["六月", "JUNE"],
+  ["七月", "JULY"],
+  ["八月", "AUGUST"],
+  ["九月", "SEPTEMBER"],
+  ["十月", "OCTOBER"],
+  ["十一月", "NOVEMBER"],
+  ["十二月", "DECEMBER"],
+];
+
+function getMonthLabel(month: number) {
+  const labels = MONTH_LABELS[month] ?? MONTH_LABELS[0];
+  return `${labels[0]} / ${labels[1]}`;
+}
+
+function toDateKey(year: number, month: number, day: number) {
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function isSameMonth(dateKey: string, year: number, month: number) {
+  return dateKey.startsWith(`${year}-${String(month + 1).padStart(2, "0")}-`);
+}
+
+function formatTooltipDate(dateKey: string) {
+  const [year, month, day] = dateKey.split("-");
+  return `${year}年${Number(month)}月${Number(day)}日`;
+}
+
+function buildMonthCells(input: {
+  year: number;
+  month: number;
+  activityDays: ActivityDay[];
+  todayActivityCount: number;
+  todayActivityLevel: number;
+  today: Date;
+}) {
+  const { year, month, activityDays, todayActivityCount, todayActivityLevel, today } = input;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const byDate = new Map(activityDays.map((item) => [item.date, item]));
+  const cells: Array<ActivityDay | null> = Array.from({ length: firstWeekday }, () => null);
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = toDateKey(year, month, day);
+    const isToday =
+      year === today.getFullYear() &&
+      month === today.getMonth() &&
+      day === today.getDate();
+    const activity = byDate.get(date);
+
+    cells.push(
+      activity ?? {
+        date,
+        day,
+        applicationCount: 0,
+        audioUploadCount: 0,
+        mockInterviewCount: 0,
+        totalCount: isToday ? todayActivityCount : 0,
+        level: isToday ? todayActivityLevel : 0,
+      },
+    );
+  }
+
+  while (cells.length < 42) {
+    cells.push(null);
+  }
+
+  return cells;
 }
