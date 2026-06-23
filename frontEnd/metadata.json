@@ -1,0 +1,6 @@
+{
+  "name": "职投 Copilot",
+  "description": "职投 Copilot 是一款职场投资与求职辅导套件，支持求职漏斗管理、智能待办、模拟面试、录音复盘、岗位精细化匹配以及简历资产管理，将求职过程打造为可量化、高效率的数据管线。",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

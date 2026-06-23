@@ -1,0 +1,281 @@
+// 告诉 Prisma：生成可以在 TypeScript 中使用的数据库客户端。
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 告诉 Prisma：当前项目连接 PostgreSQL。
+// 具体 DATABASE_URL 由项目根目录的 prisma.config.ts 读取。
+datasource db {
+  provider = "postgresql"
+}
+
+// User 表示一个登录用户。
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  name         String?
+  passwordHash String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // 一个用户可以拥有多份简历。
+  resumes      Resume[]
+
+  // 一个用户可以保存多个目标岗位/JD。
+  jobs         Job[]
+
+  profile      UserProfile?
+  dailyActivities DailyActivity[]
+  knowledgeBases InterviewKnowledgeBase[]
+  interviewSessions InterviewSession[]
+  reviewReports ReviewReport[]
+}
+
+// Resume 表示一份简历。
+model Resume {
+  id                Int      @id @default(autoincrement())
+  title             String
+  originalContent   String   @default("") @db.Text
+  originalFileName   String?
+  originalFilePath   String?  @db.Text
+  originalFileUrl    String?  @db.Text
+  originalFileMime   String?
+  originalFileSize   Int?
+  structuredContent Json?
+  optimizedContent  Json?
+  draftContent      Json?
+  finalizedContent  Json?
+  jdMatchResult     Json?
+  finalizedAt       DateTime?
+  optimizationVersion Int    @default(0)
+  mineruTaskId      String?  @unique
+  parseStatus       String   @default("not_started")
+  structureStatus   String   @default("idle")
+  optimizeStatus    String   @default("idle")
+
+  userId            Int
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions          ResumeVersion[]
+  exports           ResumeExport[]
+  interviewSessions InterviewSession[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, updatedAt])
+  @@index([parseStatus])
+  @@index([finalizedAt])
+}
+
+model ResumeVersion {
+  id        Int      @id @default(autoincrement())
+  resumeId  Int
+  resume    Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  version   Int
+  label     String
+  source    String
+  content   Json
+  notes     Json?
+  isFinal   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  exports   ResumeExport[]
+
+  @@unique([resumeId, version])
+  @@index([resumeId, createdAt])
+  @@index([resumeId, isFinal])
+}
+
+model ResumeExport {
+  id            Int      @id @default(autoincrement())
+  resumeId      Int
+  resume        Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+
+  versionId     Int?
+  version       ResumeVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  versionNumber Int
+  template      String
+  filePath      String
+  s3Url         String?
+  downloadCount Int      @default(0)
+  isStale       Boolean  @default(false)
+  generatedAt   DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([resumeId, versionNumber, template])
+  @@index([resumeId, generatedAt])
+  @@index([resumeId, isStale])
+}
+
+// Job 表示用户保存的一个目标岗位/JD。
+// 它是后续“针对岗位优化简历、生成投递记录、面试复盘”的基础数据。
+model Job {
+  id          Int      @id @default(autoincrement())
+
+  // 岗位名称，例如“前端工程师”“NestJS 后端工程师”。
+  title       String
+
+  // 公司名称可选，因为有些用户可能只先保存 JD 文本。
+  company     String?
+
+  // 完整 JD 文本，后续会交给大模型做岗位定向分析和简历匹配。
+  description String   @db.Text
+
+  // 招聘链接或来源地址可选。
+  sourceUrl   String?
+
+  // MVP 阶段先用字符串保存状态；稳定后可升级为 Prisma Enum。
+  // 当前约定：draft / interested / applied / interviewing / offer / rejected / archived
+  status      String   @default("draft")
+
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, updatedAt])
+  @@index([userId, status])
+}
+
+model UserProfile {
+  id               Int      @id @default(autoincrement())
+  name             String?
+  jobMode          String   @default("experienced")
+  targetDirection  String   @default("tech")
+  targetDirections Json?
+  customTargetDirection String?
+  subscriptionPlan String   @default("free")
+  language         String   @default("zh-CN")
+  questionCount    Int      @default(5)
+  enableVoiceInput Boolean  @default(true)
+  showStarTips     Boolean  @default(true)
+
+  userId           Int      @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model DailyActivity {
+  id                 Int      @id @default(autoincrement())
+  date               DateTime @db.Date
+  applicationCount   Int      @default(0)
+  audioUploadCount   Int      @default(0)
+  mockInterviewCount Int      @default(0)
+
+  userId             Int
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model InterviewKnowledgeBase {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  focusAreas  Json?
+
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  records     RealInterviewRecord[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, updatedAt])
+}
+
+model RealInterviewRecord {
+  id              String   @id @default(cuid())
+  title           String
+  sourceType      String
+  interviewDate   DateTime
+  transcript      String?  @db.Text
+  audioFileName   String?
+  audioFileSize   Int?
+  audioUrl        String?  @db.Text
+  asrProvider     String?
+  asrModel        String?
+  asrRawJson      Json?
+  speakerTranscript String? @db.Text
+  roleTranscript  String?  @db.Text
+  transcribedAt   DateTime?
+  status          String   @default("ready")
+  buildStatus     String   @default("not_built")
+  buildError      String?  @db.Text
+  structuredContent Json?
+  chunks          Json?
+
+  knowledgeBaseId String
+  knowledgeBase   InterviewKnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([knowledgeBaseId, createdAt])
+  @@index([status])
+  @@index([buildStatus])
+}
+
+model InterviewSession {
+  id               String   @id @default(cuid())
+  type             String
+  totalQuestions   Int
+  currentQuestion  Int      @default(1)
+  ended            Boolean  @default(false)
+  jobDescription   String?  @db.Text
+  knowledgeBaseIds Json?
+  questions        Json?
+  questionFeedback Json?
+  strategySnapshot Json?
+  messages         Json
+
+  userId           Int
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumeId         Int?
+  resume           Resume?  @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+  report           ReviewReport?
+
+  startedAt        DateTime @default(now())
+  endedAt          DateTime?
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId, startedAt])
+  @@index([userId, ended])
+  @@index([resumeId])
+}
+
+model ReviewReport {
+  id          String   @id @default(cuid())
+  title       String
+  score       Int
+  level       String
+  summary     String   @db.Text
+  generatedBy String   @default("ai")
+  dimensions  Json
+  questions   Json
+  nextActions Json
+  topDirections Json?
+  advantageSummary Json?
+  weaknessSummary Json?
+  interviewerSteeringReview Json?
+
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sessionId   String?  @unique
+  session     InterviewSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}

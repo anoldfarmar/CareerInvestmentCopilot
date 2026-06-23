@@ -1,0 +1,15 @@
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+export type AuthUser = {
+  id: number;
+  email: string;
+  name: string | null;
+};
+
+// 类似前端从 Context 读取当前登录用户。
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): AuthUser => {
+    const request = context.switchToHttp().getRequest<{ user: AuthUser }>();
+    return request.user;
+  },
+);

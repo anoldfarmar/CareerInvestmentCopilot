@@ -1,0 +1,23 @@
+# 启动一个本地 PostgreSQL 数据库容器
+services:
+  postgres:
+    # 使用 PostgreSQL 16 版本
+    image: postgres:16
+    container_name: ai-job-postgres
+
+    # 数据库账号、密码和数据库名称
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_job
+
+    # 将电脑的 5432 端口映射到容器
+    ports:
+      - "5432:5432"
+
+    # 即使删除容器，数据库数据仍然保留
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
