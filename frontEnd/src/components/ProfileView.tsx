@@ -11,14 +11,31 @@ interface ProfileViewProps {
   onLogout: () => void;
 }
 
-const directionOptions = [
-  { value: "internet", label: "互联网" },
-  { value: "ai", label: "AI / 大模型" },
-  { value: "finance", label: "金融科技" },
-  { value: "enterprise", label: "企业服务" },
-  { value: "education", label: "教育科技" },
-  { value: "custom", label: "自定义" },
-];
+const jobPreferenceOptions = [
+  { value: "研发", label: "研发", directions: ["后端", "前端", "大数据", "测试", "算法", "客户端", "基础架构", "多媒体", "安全", "计算机视觉", "数据挖掘", "运维", "自然语言处理", "机器学习", "硬件"] },
+  { value: "运营", label: "运营", directions: ["商业运营", "审核", "用户运营", "内容运营", "频道运营", "产品运营", "销售运营", "编辑", "内容引进", "客服", "游戏运营", "项目管理"] },
+  { value: "产品", label: "产品", directions: ["产品经理", "商业产品(广告)", "数据分析"] },
+  { value: "职能_支持", label: "职能/支持", directions: ["法务", "战略", "人力", "财务", "行政设施", "IT支持", "采购", "投资", "内审"] },
+  { value: "销售", label: "销售", directions: ["销售", "销售支持", "销售专员", "销售管理"] },
+  { value: "设计", label: "设计", directions: ["UI", "平面设计", "交互设计", "视觉设计", "用户研究", "多媒体设计", "3D动效", "游戏美术"] },
+  { value: "市场", label: "市场", directions: ["广告投放", "营销策划", "PR", "品牌", "政府关系", "商务拓展BD", "媒介公关"] },
+  { value: "游戏策划", label: "游戏策划", directions: ["游戏系统策划", "游戏数值策划", "游戏剧情策划", "游戏音频策划"] },
+  { value: "教研教学", label: "教研教学", directions: ["教研", "主讲", "课程辅导", "教务管理"] },
+] as const;
+
+const legacyDirectionMap: Record<string, string[]> = {
+  internet: ["研发"],
+  ai: ["研发", "算法", "自然语言处理", "机器学习"],
+  finance: ["产品", "数据分析"],
+  enterprise: ["产品"],
+  education: ["教研教学"],
+  tech: ["研发", "后端"],
+  custom: ["研发"],
+};
+
+const jobPreferenceLabels = Object.fromEntries(
+  jobPreferenceOptions.map((option) => [option.value, option.label]),
+) as Record<string, string>;
 
 const jobModeOptions = [
   { value: "student", label: "学生/校招" },
@@ -32,8 +49,8 @@ const jobModeOptions = [
 const defaultProfile: BackendProfile = {
   name: "",
   jobMode: "junior",
-  targetDirection: "internet",
-  targetDirections: ["internet"],
+  targetDirection: "研发",
+  targetDirections: ["研发", "后端"],
   customTargetDirection: "",
   subscriptionPlan: "free",
   language: "zh-CN",
@@ -53,7 +70,6 @@ export default function ProfileView({
   const [profile, setProfile] = useState<BackendProfile>(defaultProfile);
   const [isEditing, setIsEditing] = useState(false);
   const [draftProfile, setDraftProfile] = useState<BackendProfile>(defaultProfile);
-  const [newDirection, setNewDirection] = useState("");
   const [isProfileLoading, setIsProfileLoading] = useState(true);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState("");
@@ -141,32 +157,63 @@ export default function ProfileView({
     setDraftProfile((prev) => ({ ...prev, [key]: value }));
   };
 
-  const addDirection = (direction: string) => {
-    const value = direction.trim();
-    if (!value) return;
+  const toggleMainCategory = (category: string) => {
     setDraftProfile((prev) => {
-      const targetDirections = normalizeDirections([...prev.targetDirections, value], prev.targetDirection);
-      return {
-        ...prev,
-        targetDirections,
-        targetDirection: targetDirections[0],
-      };
-    });
-    setNewDirection("");
-  };
-
-  const removeDirection = (direction: string) => {
-    setDraftProfile((prev) => {
-      const nextDirections = prev.targetDirections.filter((item) => item !== direction);
-      const normalized = normalizeDirections(nextDirections.length ? nextDirections : ["internet"]);
+      const option = jobPreferenceOptions.find((item) => item.value === category);
+      const current = normalizeDirections(prev.targetDirections, prev.targetDirection);
+      const selected = current.includes(category);
+      const childDirections = option ? [...option.directions] : [];
+      const nextDirections = selected
+        ? current.filter((item) => item !== category && !childDirections.includes(item))
+        : [...current, category];
+      const normalized = normalizeDirections(nextDirections);
       return {
         ...prev,
         targetDirections: normalized,
         targetDirection: normalized[0],
-        customTargetDirection: direction === "custom" ? "" : prev.customTargetDirection,
       };
     });
   };
+
+  const toggleSubDirection = (direction: string) => {
+    setDraftProfile((prev) => {
+      const current = normalizeDirections(prev.targetDirections, prev.targetDirection);
+      const parent = jobPreferenceOptions.find((item) => [...item.directions].includes(direction));
+      const withParent = parent && !current.includes(parent.value) ? [...current, parent.value] : current;
+      const nextDirections = withParent.includes(direction)
+        ? withParent.filter((item) => item !== direction)
+        : [...withParent, direction];
+      const normalized = normalizeDirections(nextDirections);
+      return {
+        ...prev,
+        targetDirections: normalized,
+        targetDirection: normalized[0],
+      };
+    });
+  };
+
+  const removeDirection = (direction: string) => {
+    setDraftProfile((prev) => {
+      const category = jobPreferenceOptions.find((item) => item.value === direction);
+      const childDirections = category ? [...category.directions] : [];
+      const nextDirections = prev.targetDirections.filter(
+        (item) => item !== direction && !childDirections.includes(item),
+      );
+      const normalized = normalizeDirections(nextDirections);
+      return {
+        ...prev,
+        targetDirections: normalized,
+        targetDirection: normalized[0],
+      };
+    });
+  };
+
+  const selectedCategories = jobPreferenceOptions.filter((option) =>
+    draftProfile.targetDirections.includes(option.value),
+  );
+  const availableSubDirections = [
+    ...new Set(selectedCategories.flatMap((option) => option.directions)),
+  ];
 
   const openFilePicker = () => {
     fileInputRef.current?.click();
@@ -286,7 +333,7 @@ export default function ProfileView({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-mono text-outline uppercase font-semibold">目标方向</label>
+                  <label className="block text-[10px] font-mono text-outline uppercase font-semibold">求职偏好</label>
                   <div className="flex flex-wrap gap-2 mt-2">
                     {draftProfile.targetDirections.map((direction) => (
                       <button
@@ -301,42 +348,56 @@ export default function ProfileView({
                       </button>
                     ))}
                   </div>
+                  <p className="mt-3 text-[10px] font-mono text-outline font-semibold uppercase">职位类别</p>
                   <div className="grid grid-cols-3 gap-2 mt-2">
-                    {directionOptions.map((option) => (
+                    {jobPreferenceOptions.map((option) => (
                       <button
                         key={option.value}
                         type="button"
-                        onClick={() => addDirection(option.value)}
-                        disabled={draftProfile.targetDirections.includes(option.value)}
-                        className="h-8 rounded-lg border border-border-subtle bg-white text-[10px] font-bold text-on-surface-variant disabled:opacity-40 disabled:bg-zinc-50"
+                        onClick={() => toggleMainCategory(option.value)}
+                        className={`h-8 rounded-lg border text-[10px] font-bold transition-colors ${
+                          draftProfile.targetDirections.includes(option.value)
+                            ? "border-primary bg-primary-container/20 text-primary"
+                            : "border-border-subtle bg-white text-on-surface-variant"
+                        }`}
                       >
                         {option.label}
                       </button>
                     ))}
                   </div>
-                  <div className="flex gap-2 mt-2">
+                  {availableSubDirections.length > 0 && (
+                    <>
+                      <p className="mt-3 text-[10px] font-mono text-outline font-semibold uppercase">岗位方向</p>
+                      <div className="grid grid-cols-3 gap-2 mt-2">
+                        {availableSubDirections.map((direction) => (
+                          <button
+                            key={direction}
+                            type="button"
+                            onClick={() => toggleSubDirection(direction)}
+                            className={`min-h-8 rounded-lg border px-2 py-1 text-[10px] font-bold transition-colors ${
+                              draftProfile.targetDirections.includes(direction)
+                                ? "border-primary bg-primary-container/20 text-primary"
+                                : "border-border-subtle bg-white text-on-surface-variant"
+                            }`}
+                          >
+                            {direction}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <div className="mt-3">
+                    <label htmlFor="target-keywords-input" className="block text-[10px] font-mono text-outline uppercase font-semibold">
+                      目标岗位关键词
+                    </label>
                     <input
-                      value={newDirection}
-                      onChange={(e) => setNewDirection(e.target.value)}
-                      className="flex-1 text-xs font-sans p-2 border border-outline-variant rounded-md focus:ring-1 focus:ring-primary"
-                      placeholder="新增自定义方向"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => addDirection(newDirection)}
-                      className="px-3 rounded-md bg-primary-container text-on-primary-container text-xs font-bold"
-                    >
-                      添加
-                    </button>
-                  </div>
-                  {draftProfile.targetDirections.includes("custom") && (
-                    <input
+                      id="target-keywords-input"
                       value={draftProfile.customTargetDirection}
                       onChange={(e) => updateDraft("customTargetDirection", e.target.value)}
-                      className="mt-2 w-full text-xs font-sans p-2 border border-outline-variant rounded-md focus:ring-1 focus:ring-primary"
-                      placeholder="补充自定义方向，例如：AI 教育工具"
+                      className="mt-1 w-full text-xs font-sans p-2 border border-outline-variant rounded-md focus:ring-1 focus:ring-primary"
+                      placeholder="例如：智能模型数据平台工程师-AI Data、AI Agent 评测实习生"
                     />
-                  )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -413,6 +474,11 @@ export default function ProfileView({
                       {directionLabel(direction)}
                     </span>
                   ))}
+                  {profile.customTargetDirection && (
+                    <span className="px-2 py-1 rounded bg-tertiary-container/25 text-on-tertiary-container text-[9px] font-mono font-bold">
+                      {profile.customTargetDirection}
+                    </span>
+                  )}
                 </div>
                 {profileError && (
                   <p className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -645,16 +711,20 @@ function normalizeProfile(value: BackendProfile): BackendProfile {
 }
 
 function normalizeDirections(value: string[], primary?: string) {
-  const items = [...value, primary]
+  const migratedItems = [...value, primary].flatMap((item) => {
+    if (!item) return [];
+    return legacyDirectionMap[item] ?? [item];
+  });
+  const items = migratedItems
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter(Boolean);
   const uniqueItems = [...new Set(items)];
-  return uniqueItems.length ? uniqueItems : ["internet"];
+  return uniqueItems.length ? uniqueItems : ["研发"];
 }
 
 function directionLabel(value: string) {
-  return directionOptions.find((option) => option.value === value)?.label ?? value;
+  return jobPreferenceLabels[value] ?? value;
 }
 
 function jobModeLabel(value: string) {
@@ -662,7 +732,7 @@ function jobModeLabel(value: string) {
 }
 
 function buildProfileTitle(profile: BackendProfile) {
-  const directions = profile.targetDirections.map(directionLabel).join(" / ");
+  const directions = profile.targetDirections.map(directionLabel).slice(0, 4).join(" / ");
   const custom = profile.customTargetDirection ? ` · ${profile.customTargetDirection}` : "";
   return `${jobModeLabel(profile.jobMode)} · ${directions}${custom}`;
 }

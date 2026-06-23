@@ -30,8 +30,8 @@ export class ProfileService {
     return this.toResponse({
       name: profile?.name ?? user?.name ?? null,
       jobMode: profile?.jobMode ?? 'junior',
-      targetDirection: profile?.targetDirection ?? 'internet',
-      targetDirections: profile?.targetDirections ?? ['internet'],
+      targetDirection: profile?.targetDirection ?? '研发',
+      targetDirections: profile?.targetDirections ?? ['研发', '后端'],
       customTargetDirection: profile?.customTargetDirection ?? null,
       subscriptionPlan: profile?.subscriptionPlan ?? 'free',
       language: profile?.language ?? 'zh-CN',
@@ -43,7 +43,7 @@ export class ProfileService {
 
   async updateMe(userId: number, data: UpdateProfileDto) {
     const targetDirections = this.normalizeTargetDirections(data.targetDirections, data.targetDirection);
-    const targetDirection = data.targetDirection ?? targetDirections[0] ?? 'internet';
+    const targetDirection = data.targetDirection ?? targetDirections[0] ?? '研发';
     const createData = {
       userId,
       name: data.name,
@@ -123,7 +123,7 @@ export class ProfileService {
       .filter(Boolean);
 
     const uniqueItems = [...new Set(items)];
-    return uniqueItems.length > 0 ? uniqueItems : ['internet'];
+    return uniqueItems.length > 0 ? uniqueItems : ['研发'];
   }
 
   private buildSubscription(plan: string) {

@@ -263,6 +263,7 @@ export class JobRecommendationService {
     const cities = this.cleanItems(input.cities);
     const skills = this.cleanItems(input.skills);
     const profileDirections = this.readStringArray(profile?.targetDirections, profile?.targetDirection ? [profile.targetDirection] : []);
+    const profileRoleKeywords = this.splitRoleKeywords(profile?.customTargetDirection);
     const resumeText = this.clipText(
       [
         input.profile,
@@ -276,11 +277,11 @@ export class JobRecommendationService {
       3000,
     );
 
-    const inferredRoles = this.inferRoles([...profileDirections, resumeText]);
+    const inferredRoles = this.inferRoles([...profileRoleKeywords, ...profileDirections, resumeText]);
     const inferredSkills = this.inferSkills(resumeText);
 
     return {
-      targetRoles: targetRoles.length ? targetRoles : inferredRoles,
+      targetRoles: targetRoles.length ? targetRoles : profileRoleKeywords.length ? profileRoleKeywords : inferredRoles,
       cities: cities.length ? cities : ['深圳', '广州', '上海', '北京', '远程'],
       skills: skills.length ? skills : inferredSkills,
       availability: input.availability?.trim() || (profile?.jobMode === 'junior' ? '校招 实习 可尽快到岗' : '实习 可尽快到岗'),
@@ -632,6 +633,18 @@ export class JobRecommendationService {
 
   private cleanItems(value?: string[]) {
     return [...new Set((value ?? []).map((item) => item.trim()).filter(Boolean))];
+  }
+
+  private splitRoleKeywords(value?: string | null) {
+    if (!value) return [];
+    return [
+      ...new Set(
+        value
+          .split(/[,，、;；\n\r]+/)
+          .map((item) => item.trim())
+          .filter(Boolean),
+      ),
+    ].slice(0, 6);
   }
 
   private readStringArray(value: Prisma.JsonValue | null | undefined, fallback: string[]) {

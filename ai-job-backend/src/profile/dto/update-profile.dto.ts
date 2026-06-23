@@ -29,26 +29,26 @@ export class UpdateProfileDto {
   })
   jobMode?: string;
 
-  @ApiPropertyOptional({ description: '主目标方向', example: 'internet' })
+  @ApiPropertyOptional({ description: '主职位类别', example: '研发' })
   @IsOptional()
   @IsString({ message: 'targetDirection 必须是字符串' })
   @MaxLength(80, { message: 'targetDirection 最多 80 个字符' })
   targetDirection?: string;
 
   @ApiPropertyOptional({
-    description: '目标方向多选',
+    description: '职位类别与岗位方向多选',
     type: [String],
-    example: ['internet', 'finance'],
+    example: ['研发', '后端', '算法'],
   })
   @IsOptional()
   @IsArray({ message: 'targetDirections 必须是数组' })
   @IsString({ each: true, message: 'targetDirections 每一项都必须是字符串' })
   targetDirections?: string[];
 
-  @ApiPropertyOptional({ description: '自定义目标方向', example: 'AI 教育工具' })
+  @ApiPropertyOptional({ description: '目标岗位关键词', example: '智能模型数据平台工程师-AI Data' })
   @IsOptional()
   @IsString({ message: 'customTargetDirection 必须是字符串' })
-  @MaxLength(80, { message: 'customTargetDirection 最多 80 个字符' })
+  @MaxLength(160, { message: 'customTargetDirection 最多 160 个字符' })
   customTargetDirection?: string;
 
   @ApiPropertyOptional({ description: '订阅版本', enum: ['free', 'premium'], example: 'free' })
