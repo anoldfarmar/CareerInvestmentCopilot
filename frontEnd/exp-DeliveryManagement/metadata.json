@@ -1,0 +1,6 @@
+{
+  "name": "Job Application Tracker",
+  "description": "求职投递进度与资产管理看板，支持多阶段流程管理、求职热力图、漏斗分析与AI模拟面试助手。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
