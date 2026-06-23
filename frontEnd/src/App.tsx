@@ -16,13 +16,14 @@ import ReportView from "./components/ReportView";
 import LoginView from "./components/LoginView";
 import ResumeOptimizeView from "./components/ResumeOptimizeView";
 import AudioReviewView from "./components/AudioReviewView";
+import DeliveryManagementView from "./components/DeliveryManagementView";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 export default function App() {
   // Navigation & Hierarchy State
   const [currentView, setCurrentView] = useState<
-    "login" | "workbench" | "matching" | "knowledge" | "profile" | "resume-optimize" | "audio-review" | "interview-setup" | "mock-interview" | "feedback" | "report-detail"
+    "login" | "workbench" | "matching" | "delivery-management" | "knowledge" | "profile" | "resume-optimize" | "audio-review" | "interview-setup" | "mock-interview" | "feedback" | "report-detail"
   >("login");
   const [isAuthReady, setIsAuthReady] = useState(false);
   
@@ -393,6 +394,20 @@ export default function App() {
               }
             }}
             onSelectJobForSetup={handleSelectJobForSetup}
+          />
+        );
+      case "delivery-management":
+        return (
+          <DeliveryManagementView
+            jobs={jobs}
+            onJobsChanged={setJobs}
+            onSelectJobForSetup={handleSelectJobForSetup}
+            onNavigate={(v) => {
+              setCurrentView(v);
+              if (["workbench", "matching", "knowledge", "profile"].includes(v)) {
+                setActiveTab(v as any);
+              }
+            }}
           />
         );
       case "knowledge":

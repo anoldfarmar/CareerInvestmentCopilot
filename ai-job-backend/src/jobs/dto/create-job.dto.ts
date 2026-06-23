@@ -50,6 +50,42 @@ export class CreateJobDto {
   sourceUrl?: string;
 
   @ApiPropertyOptional({
+    description: '薪资范围或待遇备注',
+    example: '25k - 35k * 15薪',
+  })
+  @IsOptional()
+  @IsString({ message: 'salary 必须是字符串' })
+  @MaxLength(120, { message: 'salary 最多只能包含 120 个字符' })
+  salary?: string;
+
+  @ApiPropertyOptional({
+    description: '工作城市或办公地点',
+    example: '上海 · 浦东新区',
+  })
+  @IsOptional()
+  @IsString({ message: 'location 必须是字符串' })
+  @MaxLength(120, { message: 'location 最多只能包含 120 个字符' })
+  location?: string;
+
+  @ApiPropertyOptional({
+    description: '投递备注',
+    example: '内推已提交，等待一面排期。',
+  })
+  @IsOptional()
+  @IsString({ message: 'notes 必须是字符串' })
+  @MaxLength(2000, { message: 'notes 最多只能包含 2000 个字符' })
+  notes?: string;
+
+  @ApiPropertyOptional({
+    description: '投递优先级',
+    enum: ['normal', 'urgent'],
+    example: 'normal',
+  })
+  @IsOptional()
+  @IsIn(['normal', 'urgent'], { message: 'priority 必须是 normal 或 urgent' })
+  priority?: string;
+
+  @ApiPropertyOptional({
     description: '岗位状态',
     enum: JOB_STATUSES,
     example: 'draft',

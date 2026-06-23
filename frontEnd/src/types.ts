@@ -82,6 +82,12 @@ export interface Job {
   logoAlt?: string;
   description: string;
   sourceUrl?: string;
+  salary?: string;
+  location?: string;
+  notes?: string;
+  priority?: "normal" | "urgent";
+  status?: string;
+  updatedAt?: string;
   matchScore: number;
   tag: string;
 }

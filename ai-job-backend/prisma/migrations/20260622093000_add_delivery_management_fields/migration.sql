@@ -1,0 +1,7 @@
+ALTER TABLE "Job"
+ADD COLUMN IF NOT EXISTS "salary" TEXT,
+ADD COLUMN IF NOT EXISTS "location" TEXT,
+ADD COLUMN IF NOT EXISTS "notes" TEXT,
+ADD COLUMN IF NOT EXISTS "priority" TEXT NOT NULL DEFAULT 'normal';
+
+CREATE INDEX IF NOT EXISTS "Job_userId_priority_idx" ON "Job"("userId", "priority");

@@ -125,6 +125,12 @@ model Job {
   // 招聘链接或来源地址可选。
   sourceUrl   String?
 
+  // 投递管理看板上的补充信息。
+  salary      String?
+  location    String?
+  notes       String?  @db.Text
+  priority    String   @default("normal")
+
   // MVP 阶段先用字符串保存状态；稳定后可升级为 Prisma Enum。
   // 当前约定：draft / interested / applied / interviewing / offer / rejected / archived
   status      String   @default("draft")
@@ -137,6 +143,7 @@ model Job {
 
   @@index([userId, updatedAt])
   @@index([userId, status])
+  @@index([userId, priority])
 }
 
 model UserProfile {

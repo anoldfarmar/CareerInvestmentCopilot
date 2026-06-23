@@ -10,7 +10,7 @@ interface WorkbenchViewProps {
   todayActivityCount: number;
   todayActivityLevel: number;
   activityDays: ActivityDay[];
-  onNavigate: (viewName: "workbench" | "matching" | "knowledge" | "profile" | "resume-optimize" | "audio-review" | "interview-setup" | "mock-interview") => void;
+  onNavigate: (viewName: "workbench" | "matching" | "delivery-management" | "knowledge" | "profile" | "resume-optimize" | "audio-review" | "interview-setup" | "mock-interview") => void;
   onSelectActionJob?: (company: string, position: string) => void;
 }
 
@@ -210,9 +210,17 @@ export default function WorkbenchView({
 
         {/* Funnel Pipeline Section */}
         <section id="funnel-pipeline-section">
-          <h2 className="font-mono text-xs font-semibold text-on-surface-variant mb-2 uppercase tracking-wider">
-            求职漏斗 / PIPELINE
-          </h2>
+          <button
+            onClick={() => onNavigate("delivery-management")}
+            className="w-full flex items-center justify-between mb-2 text-left group"
+          >
+            <h2 className="font-mono text-xs font-semibold text-on-surface-variant uppercase tracking-wider group-hover:text-primary transition-colors">
+              求职漏斗 / PIPELINE
+            </h2>
+            <span className="material-symbols-outlined text-[18px] text-outline-variant group-hover:text-primary transition-colors">
+              chevron_right
+            </span>
+          </button>
           <div className="grid grid-cols-3 gap-3">
             {/* Delivery Box */}
             <div className="bg-white border border-border-subtle p-3 rounded-xl text-center flex flex-col justify-center items-center h-24 hover:border-primary-container/40 transition-colors">

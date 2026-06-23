@@ -15,11 +15,16 @@ interface BackendLoginResult {
 export interface BackendJob {
   id: number;
   title: string;
-  company: string;
+  company?: string | null;
   description?: string | null;
   sourceUrl?: string | null;
   status?: string | null;
+  salary?: string | null;
+  location?: string | null;
+  notes?: string | null;
+  priority?: "normal" | "urgent" | string | null;
   tags?: string[] | null;
+  createdAt?: string;
   updatedAt?: string;
 }
 
@@ -209,10 +214,36 @@ export const backendApi = {
     description: string;
     sourceUrl?: string;
     status?: string;
+    salary?: string;
+    location?: string;
+    notes?: string;
+    priority?: "normal" | "urgent";
   }) =>
     apiRequest<BackendJob>("/jobs", {
       method: "POST",
       body: input,
+    }),
+  updateJob: (
+    id: string | number,
+    input: Partial<{
+      title: string;
+      company: string;
+      description: string;
+      sourceUrl: string;
+      status: string;
+      salary: string;
+      location: string;
+      notes: string;
+      priority: "normal" | "urgent";
+    }>,
+  ) =>
+    apiRequest<BackendJob>(`/jobs/${id}`, {
+      method: "PATCH",
+      body: input,
+    }),
+  deleteJob: (id: string | number) =>
+    apiRequest<BackendJob>(`/jobs/${id}`, {
+      method: "DELETE",
     }),
   recommendJobs: (input: {
     targetRoles?: string[];
@@ -448,11 +479,17 @@ export function mapBackendJob(job: BackendJob): Job {
   return {
     id: String(job.id),
     title: job.title,
-    company: job.company,
+    company: job.company ?? "未知公司",
     logoUrl: "",
-    logoAlt: job.company,
+    logoAlt: job.company ?? "未知公司",
     description: job.description ?? "暂无岗位描述",
     sourceUrl: job.sourceUrl ?? undefined,
+    salary: job.salary ?? undefined,
+    location: job.location ?? undefined,
+    notes: job.notes ?? undefined,
+    priority: job.priority === "urgent" ? "urgent" : "normal",
+    status: job.status ?? undefined,
+    updatedAt: formatDate(job.updatedAt ?? job.createdAt),
     matchScore: statusToScore(job.status),
     tag: job.tags?.[0] ?? statusToLabel(job.status),
   };
