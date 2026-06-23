@@ -132,6 +132,26 @@ export default function App() {
     setCurrentView("login");
   };
 
+  const syncPipelineFromJobs = (nextJobs: Job[]) => {
+    const applications = nextJobs.filter((job) =>
+      ["applied", "interviewing", "offer", "rejected"].includes(job.status ?? ""),
+    ).length;
+    const interviews = nextJobs.filter((job) =>
+      ["interviewing", "offer"].includes(job.status ?? ""),
+    ).length;
+    const offers = nextJobs.filter((job) => job.status === "offer").length;
+
+    setDeliveryCount(applications);
+    setInterviewCount(interviews);
+    setOfferCount(offers);
+  };
+
+  const handleJobsChanged = (nextJobs: Job[]) => {
+    setJobs(nextJobs);
+    syncPipelineFromJobs(nextJobs);
+    void hydrateFromBackend();
+  };
+
   // Handle active to-do checks
   const handleToggleTodo = (id: string) => {
     setTodos((prev) =>
@@ -400,7 +420,7 @@ export default function App() {
         return (
           <DeliveryManagementView
             jobs={jobs}
-            onJobsChanged={setJobs}
+            onJobsChanged={handleJobsChanged}
             onSelectJobForSetup={handleSelectJobForSetup}
             onNavigate={(v) => {
               setCurrentView(v);
