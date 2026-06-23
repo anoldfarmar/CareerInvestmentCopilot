@@ -37,39 +37,39 @@ export class JobsController {
   ) {}
 
   @Post()
-  @ApiOperation({ summary: '创建目标岗位/JD' })
+  @ApiOperation({ summary: 'Create a target job or JD' })
   create(@CurrentUser() user: AuthUser, @Body() body: CreateJobDto) {
     return this.jobsService.create(user.id, body);
   }
 
   @Get()
-  @ApiOperation({ summary: '查询当前用户保存的岗位列表' })
+  @ApiOperation({ summary: 'List saved jobs for current user' })
   findAll(@CurrentUser() user: AuthUser, @Query() query: PaginationQueryDto) {
     return this.jobsService.findAll(user.id, query);
   }
 
   @Get('analysis/summary')
-  @ApiOperation({ summary: '查询投递反馈分析摘要' })
+  @ApiOperation({ summary: 'Get job application analysis summary' })
   getAnalysis(@CurrentUser() user: AuthUser) {
     return this.jobsService.getAnalysis(user.id);
   }
 
   @Post('recommendations')
-  @ApiOperation({ summary: '根据简历画像搜索公开招聘网页并推荐岗位' })
+  @ApiOperation({ summary: 'Recommend public job postings' })
   recommend(@CurrentUser() user: AuthUser, @Body() body: RecommendJobsDto) {
     return this.jobRecommendationService.recommendJobs(user.id, body);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: '查询岗位详情' })
-  @ApiParam({ name: 'id', description: '岗位 id', example: 1 })
+  @ApiOperation({ summary: 'Get job detail' })
+  @ApiParam({ name: 'id', description: 'Job id', example: 1 })
   findOne(@CurrentUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
     return this.jobsService.findOne(user.id, id);
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: '修改岗位/JD' })
-  @ApiParam({ name: 'id', description: '岗位 id', example: 1 })
+  @ApiOperation({ summary: 'Update a job or JD' })
+  @ApiParam({ name: 'id', description: 'Job id', example: 1 })
   update(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseIntPipe) id: number,
@@ -79,8 +79,8 @@ export class JobsController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: '删除岗位/JD' })
-  @ApiParam({ name: 'id', description: '岗位 id', example: 1 })
+  @ApiOperation({ summary: 'Delete a job or JD' })
+  @ApiParam({ name: 'id', description: 'Job id', example: 1 })
   remove(@CurrentUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
     return this.jobsService.remove(user.id, id);
   }

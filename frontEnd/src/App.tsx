@@ -20,6 +20,14 @@ import DeliveryManagementView from "./components/DeliveryManagementView";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
+function getPipelineCounts(jobs: Job[]) {
+  return {
+    applications: jobs.filter((job) => job.status === "applied").length,
+    interviews: jobs.filter((job) => job.status === "interviewing").length,
+    offers: jobs.filter((job) => job.status === "offer").length,
+  };
+}
+
 export default function App() {
   // Navigation & Hierarchy State
   const [currentView, setCurrentView] = useState<
@@ -76,9 +84,7 @@ export default function App() {
       setResumes(nextResumes);
       setReports(nextReports);
       setActiveReport(nextReports[0] ?? null);
-      setDeliveryCount(overviewResponse.pipeline?.applications ?? 0);
-      setInterviewCount(overviewResponse.pipeline?.interviews ?? 0);
-      setOfferCount(overviewResponse.pipeline?.offers ?? 0);
+      syncPipelineFromJobs(nextJobs);
       setTodayActivityCount(overviewResponse.activity?.todayCount ?? 0);
       setTodayActivityLevel(overviewResponse.activity?.level ?? 0);
       setActivityDays(overviewResponse.activity?.calendar ?? []);
@@ -133,23 +139,15 @@ export default function App() {
   };
 
   const syncPipelineFromJobs = (nextJobs: Job[]) => {
-    const applications = nextJobs.filter((job) =>
-      ["applied", "interviewing", "offer", "rejected"].includes(job.status ?? ""),
-    ).length;
-    const interviews = nextJobs.filter((job) =>
-      ["interviewing", "offer"].includes(job.status ?? ""),
-    ).length;
-    const offers = nextJobs.filter((job) => job.status === "offer").length;
-
-    setDeliveryCount(applications);
-    setInterviewCount(interviews);
-    setOfferCount(offers);
+    const pipeline = getPipelineCounts(nextJobs);
+    setDeliveryCount(pipeline.applications);
+    setInterviewCount(pipeline.interviews);
+    setOfferCount(pipeline.offers);
   };
 
   const handleJobsChanged = (nextJobs: Job[]) => {
     setJobs(nextJobs);
     syncPipelineFromJobs(nextJobs);
-    void hydrateFromBackend();
   };
 
   // Handle active to-do checks
@@ -241,9 +239,13 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  // Increase pipeline deliveries metrics from 12 to 13
-  const handleIncrementDeliveries = () => {
-    setDeliveryCount((prev) => prev + 1);
+  const handleRefreshPipeline = async () => {
+    await hydrateFromBackend();
+  };
+
+  const handleDeleteJob = async (id: string) => {
+    await backendApi.deleteJob(id);
+    handleJobsChanged(jobs.filter((job) => job.id !== id));
   };
 
   // Prepare setups parameters
@@ -404,9 +406,7 @@ export default function App() {
         return (
           <JobMatchingView
             jobs={jobs}
-            onJobSaved={(job) => {
-              setJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
-            }}
+            onDeleteJob={handleDeleteJob}
             onNavigate={(v) => {
               setCurrentView(v);
               if (["workbench", "matching", "knowledge", "profile"].includes(v)) {
@@ -554,7 +554,7 @@ export default function App() {
               }
             }}
             onAddTodo={handleAddTodo}
-            onIncrementDeliveries={handleIncrementDeliveries}
+            onIncrementDeliveries={handleRefreshPipeline}
           />
         );
       default:

@@ -10,7 +10,7 @@ interface ReportViewProps {
   transcripts: InterviewTranscriptItem[];
   onNavigate: (viewName: "workbench" | "matching" | "knowledge" | "profile" | "interview-setup" | "mock-interview" | "feedback" | "report-detail") => void;
   onAddTodo: (todo: Todo) => void;
-  onIncrementDeliveries: () => void;
+  onIncrementDeliveries: () => void | Promise<void>;
 }
 
 export default function ReportView({
@@ -61,8 +61,8 @@ export default function ReportView({
     window.alert(`「${text}」已同步到工作台待办。`);
   };
 
-  const handleFinishReportFlow = () => {
-    onIncrementDeliveries();
+  const handleFinishReportFlow = async () => {
+    await onIncrementDeliveries();
     onNavigate("workbench");
   };
 
@@ -352,6 +352,7 @@ function QuestionReviewCard({
   question,
   index,
 }: {
+  key?: React.Key;
   question: NonNullable<InterviewReport["questions"]>[number];
   index: number;
 }) {

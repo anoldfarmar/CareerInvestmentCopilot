@@ -56,9 +56,9 @@ export class OverviewService {
       ]);
 
     const statusCounts = this.toStatusCounts(jobStatusCounts);
-    const applicationCount =
-      statusCounts.applied + statusCounts.interviewing + statusCounts.offer + statusCounts.rejected;
-    const funnelInterviewCount = statusCounts.interviewing + statusCounts.offer;
+    const applicationCount = statusCounts.applied;
+    const funnelInterviewCount = statusCounts.interviewing;
+    const trackedJobCount = statusCounts.applied + statusCounts.interviewing + statusCounts.offer + statusCounts.rejected;
     const activityCalendar = this.buildActivityCalendar(activityRows);
     const todayActivity =
       activityCalendar.find((item) => item.date === this.toDateKey(new Date())) ??
@@ -93,7 +93,7 @@ export class OverviewService {
       },
       suggestedTodos: this.buildSuggestedTodos({
         resumeCount,
-        applicationCount,
+        applicationCount: trackedJobCount,
         interviewCount,
         reportCount,
       }),

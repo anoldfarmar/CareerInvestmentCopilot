@@ -169,7 +169,7 @@ export default function DeliveryManagementView({
 
       <main className="w-full max-w-md mx-auto px-5 pt-4 pb-28 space-y-5">
         <section className="grid grid-cols-3 gap-3">
-          <PipelineStat label="投递" value={stats.applied + stats.interviewing + stats.offer} icon="outbox" />
+          <PipelineStat label="投递" value={stats.applied} icon="outbox" />
           <PipelineStat label="面试" value={stats.interviewing} icon="forum" />
           <PipelineStat label="Offer" value={stats.offer} icon="workspace_premium" active />
         </section>

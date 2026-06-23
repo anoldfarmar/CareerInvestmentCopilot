@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --mode development && node server.js",
-    "dev:hmr": "vite --port=3000 --host=0.0.0.0 --force",
+    "dev:hmr": "vite --port=5174 --host=0.0.0.0 --force",
     "build": "vite build",
-    "preview": "vite preview",
+    "preview": "vite preview --host localhost --port 5174",
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
     "lint": "tsc --noEmit"
   },

@@ -333,6 +333,7 @@ function RecordCard({
   isExpanded,
   onToggleExpand,
 }: {
+  key?: React.Key;
   record: BackendKnowledgeRecord;
   disabled: boolean;
   onBuild: () => void;

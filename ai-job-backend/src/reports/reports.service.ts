@@ -60,6 +60,7 @@ type QuestionReview = {
     nextTry: string;
   };
   practiceResources: string[];
+  steeringAdvice?: string;
   correctPoints?: string[];
   wrongPoints?: string[];
   knowledgeTags?: string[];
@@ -70,6 +71,27 @@ type TopDirection = {
   title: string;
   reason: string;
   actions: string[];
+};
+
+type AdvantageSummary = {
+  advantage: string;
+  evidence: string[];
+  howToAmplify: string;
+  steeringExamples: string[];
+  risk: string;
+};
+
+type WeaknessSummary = {
+  weakness: string;
+  observedIn: string[];
+  whyItMatters: string;
+  repairPlan: string[];
+};
+
+type InterviewerSteeringReview = {
+  successfulSteering: string[];
+  failedSteering: string[];
+  nextTimeTactics: string[];
 };
 
 type ReviewDimension = {
@@ -85,6 +107,9 @@ type AiReportPayload = {
   questions: QuestionReview[];
   nextActions: string[];
   topDirections: TopDirection[];
+  advantageSummary: AdvantageSummary[];
+  weaknessSummary: WeaknessSummary[];
+  interviewerSteeringReview: InterviewerSteeringReview;
 };
 
 type DeepseekChatResponse = {
@@ -153,7 +178,8 @@ export class ReportsService {
     const messages = this.readMessages(session.messages);
     const questions = this.readQuestions(session.questions);
     const threads = this.buildQuestionThreads(questions, messages);
-    const reportData = await this.buildReportData(session.type, session.totalQuestions, threads);
+    const strategySnapshot = this.readJsonObject(session.strategySnapshot);
+    const reportData = await this.buildReportData(session.type, session.totalQuestions, threads, strategySnapshot);
 
     const report = await this.prisma.reviewReport.upsert({
       where: { sessionId: session.id },
@@ -163,6 +189,9 @@ export class ReportsService {
         questions: reportData.questions as unknown as Prisma.InputJsonValue,
         nextActions: reportData.nextActions as unknown as Prisma.InputJsonValue,
         topDirections: reportData.topDirections as unknown as Prisma.InputJsonValue,
+        advantageSummary: reportData.advantageSummary as unknown as Prisma.InputJsonValue,
+        weaknessSummary: reportData.weaknessSummary as unknown as Prisma.InputJsonValue,
+        interviewerSteeringReview: reportData.interviewerSteeringReview as unknown as Prisma.InputJsonValue,
         userId,
         sessionId: session.id,
       },
@@ -172,17 +201,26 @@ export class ReportsService {
         questions: reportData.questions as unknown as Prisma.InputJsonValue,
         nextActions: reportData.nextActions as unknown as Prisma.InputJsonValue,
         topDirections: reportData.topDirections as unknown as Prisma.InputJsonValue,
+        advantageSummary: reportData.advantageSummary as unknown as Prisma.InputJsonValue,
+        weaknessSummary: reportData.weaknessSummary as unknown as Prisma.InputJsonValue,
+        interviewerSteeringReview: reportData.interviewerSteeringReview as unknown as Prisma.InputJsonValue,
       },
     });
 
     return this.toReportResponse(report);
   }
 
-  private async buildReportData(type: string, totalQuestions: number, threads: QuestionThread[]) {
+  private async buildReportData(
+    type: string,
+    totalQuestions: number,
+    threads: QuestionThread[],
+    strategySnapshot?: Record<string, unknown>,
+  ) {
     try {
-      const aiReport = await this.generateAiReport(type, totalQuestions, threads);
+      const aiReport = await this.generateAiReport(type, totalQuestions, threads, strategySnapshot);
       return {
         title: `${this.typeLabel(type)}复盘报告`,
+        generatedBy: 'ai',
         score: this.clampScore(aiReport.score),
         level: aiReport.level || this.scoreLevel(aiReport.score),
         summary: aiReport.summary,
@@ -190,14 +228,22 @@ export class ReportsService {
         questions: this.normalizeQuestionReviews(aiReport.questions, threads),
         nextActions: this.normalizeStringArray(aiReport.nextActions, this.buildLocalNextActions(aiReport.score)),
         topDirections: this.normalizeTopDirections(aiReport.topDirections),
+        advantageSummary: this.normalizeAdvantageSummary(aiReport.advantageSummary, threads, strategySnapshot),
+        weaknessSummary: this.normalizeWeaknessSummary(aiReport.weaknessSummary, threads),
+        interviewerSteeringReview: this.normalizeSteeringReview(aiReport.interviewerSteeringReview),
       };
     } catch (error) {
       this.logger.warn(`DeepSeek 复盘报告生成失败，已使用本地规则报告：${error instanceof Error ? error.message : String(error)}`);
-      return this.buildLocalReport(type, totalQuestions, threads);
+      return this.buildLocalReport(type, totalQuestions, threads, strategySnapshot);
     }
   }
 
-  private async generateAiReport(type: string, totalQuestions: number, threads: QuestionThread[]): Promise<AiReportPayload> {
+  private async generateAiReport(
+    type: string,
+    totalQuestions: number,
+    threads: QuestionThread[],
+    strategySnapshot?: Record<string, unknown>,
+  ): Promise<AiReportPayload> {
     const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
       throw new Error('缺少 DEEPSEEK_API_KEY');
@@ -223,6 +269,7 @@ export class ReportsService {
               interviewType: type,
               totalQuestions,
               answeredQuestions: threads.filter((thread) => thread.answers.length > 0).length,
+              strategySnapshot: strategySnapshot ?? null,
               questionThreads: threads.map((thread) => ({
                 id: thread.id,
                 question: thread.question,
@@ -260,12 +307,19 @@ export class ReportsService {
       '请逐题分析候选人的每次回答质量，尤其关注：是否正面回答、事实是否具体、逻辑是否清晰、是否有量化结果、技术细节是否可信、个人贡献是否明确。',
       '每道题必须包含 correctPoints、wrongPoints、diagnosis、improvement、referenceAnswer、knowledgeTags 和 qaTranscript。knowledgeTags 后续会作为知识库标签。',
       'wrongPoints 不是羞辱用户，而是指出回答中的缺失、风险、模糊、逻辑漏洞或下次需要修正的地方。',
+      '请额外总结候选人的优势打法、短板修复路线，以及候选人是否成功把面试官自然引导到自己的强项。',
+      '有效引导必须与当前题目、简历证据或目标 JD 有关；如果候选人只是逃避问题，请在 failedSteering 中指出。',
       '严格返回 JSON object，不要 Markdown，不要解释。',
-      'JSON 格式：{"score":1-100,"level":"优秀|良好|待提升|需要补强","summary":"整体总结","dimensions":[{"label":"内容完整度","score":1-100}],"questions":[{"id":"q-1","question":"题目","answer":"用户回答汇总","comment":"总体点评","correctPoints":["答得好的地方"],"wrongPoints":["错误或缺失"],"issues":["短标签"],"advice":"下次怎么改","referenceAnswer":"参考表达","diagnosis":{"content":"内容诊断","logic":"逻辑诊断","expression":"表达诊断","depth":"深度诊断"},"improvement":{"summary":"改进摘要","example":"可直接照着练的示例","nextTry":"下一次练习要求"},"practiceResources":["练习建议"],"knowledgeTags":["知识库标签"],"qaTranscript":[{"role":"assistant","content":"问题或追问"},{"role":"user","content":"回答"}]}],"nextActions":["下一步行动"],"topDirections":[{"title":"方向","reason":"原因","actions":["动作"]}]}',
+      'JSON 格式：{"score":1-100,"level":"优秀|良好|待提升|需要补强","summary":"整体总结","dimensions":[{"label":"内容完整度","score":1-100}],"questions":[{"id":"q-1","question":"题目","answer":"用户回答汇总","comment":"总体点评","correctPoints":["答得好的地方"],"wrongPoints":["错误或缺失"],"issues":["短标签"],"advice":"下次怎么改","referenceAnswer":"参考表达","diagnosis":{"content":"内容诊断","logic":"逻辑诊断","expression":"表达诊断","depth":"深度诊断"},"improvement":{"summary":"改进摘要","example":"可直接照着练的示例","nextTry":"下一次练习要求"},"practiceResources":["练习建议"],"knowledgeTags":["知识库标签"],"steeringAdvice":"这题如何自然引导到强项","qaTranscript":[{"role":"assistant","content":"问题或追问"},{"role":"user","content":"回答"}]}],"nextActions":["下一步行动"],"topDirections":[{"title":"方向","reason":"原因","actions":["动作"]}],"advantageSummary":[{"advantage":"优势","evidence":["证据"],"howToAmplify":"如何放大","steeringExamples":["真实面试话术"],"risk":"讲不好会产生的风险"}],"weaknessSummary":[{"weakness":"短板","observedIn":["出现在哪些题"],"whyItMatters":"为什么影响岗位匹配","repairPlan":["修复动作"]}],"interviewerSteeringReview":{"successfulSteering":["有效引导片段"],"failedSteering":["逃避或生硬转移片段"],"nextTimeTactics":["下次策略"]}}',
     ].join('\n');
   }
 
-  private buildLocalReport(type: string, totalQuestions: number, threads: QuestionThread[]) {
+  private buildLocalReport(
+    type: string,
+    totalQuestions: number,
+    threads: QuestionThread[],
+    strategySnapshot?: Record<string, unknown>,
+  ) {
     const answered = threads.filter((thread) => thread.answers.length > 0);
     const score = this.calculateScore(answered, totalQuestions);
     const questionReviews = threads.map((thread) => this.buildLocalQuestionReview(thread));
@@ -273,6 +327,7 @@ export class ReportsService {
 
     return {
       title: `${this.typeLabel(type)}复盘报告`,
+      generatedBy: 'local',
       score,
       level: this.scoreLevel(score),
       summary: this.buildLocalSummary(score, answered.length, totalQuestions, topDirections),
@@ -280,6 +335,9 @@ export class ReportsService {
       questions: questionReviews,
       nextActions: this.buildLocalNextActions(score, topDirections),
       topDirections,
+      advantageSummary: this.buildLocalAdvantageSummary(questionReviews, strategySnapshot),
+      weaknessSummary: this.buildLocalWeaknessSummary(questionReviews),
+      interviewerSteeringReview: this.buildLocalSteeringReview(questionReviews),
     };
   }
 
@@ -384,6 +442,7 @@ export class ReportsService {
       diagnosis,
       improvement,
       practiceResources: this.buildPracticeResources(thread, issues),
+      steeringAdvice: this.buildSteeringAdvice(thread, answer, issues),
       knowledgeTags: this.buildKnowledgeTags(thread, issues),
       qaTranscript: thread.transcript,
     };
@@ -559,6 +618,90 @@ export class ReportsService {
     return ['重写自我介绍并控制在 60 秒内', ...actions.slice(0, 4)];
   }
 
+  private buildSteeringAdvice(thread: QuestionThread, answer: string, issues: string[]) {
+    if (!answer.trim()) {
+      return '这题还没有形成可引导的回答。下一次先正面回答问题，再补一个与岗位相关的项目证据。';
+    }
+    if (issues.includes('缺少量化结果')) {
+      return '这题可以先给结论，再自然引到一个有指标的项目案例，用数据证明你的优势。';
+    }
+    return `这题可以把话题自然引到“${this.dimensionLabel(thread.dimension)}”相关优势，但要先回答当前问题，再补项目证据。`;
+  }
+
+  private buildLocalAdvantageSummary(
+    reviews: QuestionReview[],
+    strategySnapshot?: Record<string, unknown>,
+  ): AdvantageSummary[] {
+    const strategyAdvantages = this.readArrayObjects(strategySnapshot?.advantageProfile);
+    if (strategyAdvantages.length > 0) {
+      return strategyAdvantages.slice(0, 3).map((item) => ({
+        advantage: this.toText(item.area, '可放大的优势点'),
+        evidence: this.normalizeStringArray(item.evidence, ['来自本轮面试策略快照']),
+        howToAmplify: '真实面试中先正面回答问题，再补充一个与 JD 相关的项目证据。',
+        steeringExamples: this.normalizeStringArray(item.candidateSteeringSentences, [
+          '这个问题我可以结合一个更贴近目标岗位的项目经历来说明。',
+        ]),
+        risk: '如果没有事实、指标或个人贡献边界支撑，优势会显得空泛。',
+      }));
+    }
+
+    const strongReviews = reviews.filter((review) => (review.correctPoints?.length ?? 0) > 0).slice(0, 3);
+    return (strongReviews.length ? strongReviews : reviews.slice(0, 1)).map((review) => ({
+      advantage: review.correctPoints?.[0] ?? '能够围绕问题给出基本经历或观点',
+      evidence: [review.question, review.answer].filter(Boolean).slice(0, 2),
+      howToAmplify: '下次回答时先给结论，再补充背景、行动、指标和个人贡献。',
+      steeringExamples: [
+        '这个问题我先回答结论，再用一个真实项目例子展开。',
+        '如果您关注岗位匹配度，我可以补充这个经历和目标 JD 的对应关系。',
+      ],
+      risk: '如果只讲经历不讲指标，面试官可能难以判断能力真实性。',
+    }));
+  }
+
+  private buildLocalWeaknessSummary(reviews: QuestionReview[]): WeaknessSummary[] {
+    const issueMap = new Map<string, string[]>();
+    for (const review of reviews) {
+      for (const issue of review.issues) {
+        issueMap.set(issue, [...(issueMap.get(issue) ?? []), review.question]);
+      }
+    }
+
+    const entries = Array.from(issueMap.entries()).slice(0, 4);
+    return entries.length
+      ? entries.map(([weakness, questions]) => ({
+          weakness,
+          observedIn: questions.slice(0, 3),
+          whyItMatters: '这个问题会影响面试官对岗位匹配度、项目深度和表达可信度的判断。',
+          repairPlan: ['补充具体背景和个人动作', '加入至少一个量化指标', '用 STAR 顺序重写一版答案'],
+        }))
+      : [{
+          weakness: '需要继续提升岗位贴合表达',
+          observedIn: reviews.map((review) => review.question).slice(0, 2),
+          whyItMatters: '面试中不仅要答对，还要让面试官听到与你目标岗位直接相关的证据。',
+          repairPlan: ['把 JD 关键词映射到项目经历', '准备 2 个可复用的优势案例'],
+        }];
+  }
+
+  private buildLocalSteeringReview(reviews: QuestionReview[]): InterviewerSteeringReview {
+    const usefulExamples = reviews
+      .filter((review) => review.answer.trim())
+      .slice(0, 2)
+      .map((review) => `可从「${review.question}」自然引到自己的项目证据。`);
+
+    return {
+      successfulSteering: usefulExamples,
+      failedSteering: reviews
+        .filter((review) => review.issues.includes('回答偏短'))
+        .slice(0, 2)
+        .map((review) => `「${review.question}」回答偏短，容易被认为是在回避细节。`),
+      nextTimeTactics: [
+        '先正面回答当前问题，再说“我可以结合一个项目例子展开”。',
+        '引导到优势点时必须带上事实、指标和个人贡献。',
+        '如果问题触及短板，不要绕开，先承认边界，再说明补救动作和学习进展。',
+      ],
+    };
+  }
+
   private normalizeQuestionReviews(aiQuestions: QuestionReview[] | undefined, threads: QuestionThread[]) {
     if (!Array.isArray(aiQuestions) || aiQuestions.length === 0) {
       return threads.map((thread) => this.buildLocalQuestionReview(thread));
@@ -583,6 +726,7 @@ export class ReportsService {
         wrongPoints: this.normalizeStringArray(item.wrongPoints, fallback.wrongPoints ?? []),
         practiceResources: this.normalizeStringArray(item.practiceResources, fallback.practiceResources),
         knowledgeTags: this.normalizeStringArray(item.knowledgeTags, fallback.knowledgeTags ?? []),
+        steeringAdvice: item.steeringAdvice ?? fallback.steeringAdvice,
         diagnosis: { ...fallback.diagnosis, ...(item.diagnosis ?? {}) },
         improvement: { ...fallback.improvement, ...(item.improvement ?? {}) },
         qaTranscript: Array.isArray(item.qaTranscript) ? item.qaTranscript : fallback.qaTranscript,
@@ -620,8 +764,74 @@ export class ReportsService {
     }));
   }
 
+  private normalizeAdvantageSummary(
+    value: unknown,
+    threads: QuestionThread[],
+    strategySnapshot?: Record<string, unknown>,
+  ): AdvantageSummary[] {
+    const items = this.readArrayObjects(value);
+    if (items.length === 0) {
+      const fallbackReviews = threads.map((thread) => this.buildLocalQuestionReview(thread));
+      return this.buildLocalAdvantageSummary(fallbackReviews, strategySnapshot);
+    }
+
+    return items.slice(0, 5).map((item) => ({
+      advantage: this.toText(item.advantage, '可放大的优势点'),
+      evidence: this.normalizeStringArray(item.evidence, []),
+      howToAmplify: this.toText(item.howToAmplify, '先正面回答问题，再补充与岗位相关的项目证据。'),
+      steeringExamples: this.normalizeStringArray(item.steeringExamples, []),
+      risk: this.toText(item.risk, '如果缺少事实和指标支撑，优势会显得空泛。'),
+    }));
+  }
+
+  private normalizeWeaknessSummary(value: unknown, threads: QuestionThread[]): WeaknessSummary[] {
+    const items = this.readArrayObjects(value);
+    if (items.length === 0) {
+      const fallbackReviews = threads.map((thread) => this.buildLocalQuestionReview(thread));
+      return this.buildLocalWeaknessSummary(fallbackReviews);
+    }
+
+    return items.slice(0, 5).map((item) => ({
+      weakness: this.toText(item.weakness, '需要补强的能力点'),
+      observedIn: this.normalizeStringArray(item.observedIn, []),
+      whyItMatters: this.toText(item.whyItMatters, '这会影响面试官对岗位匹配度的判断。'),
+      repairPlan: this.normalizeStringArray(item.repairPlan, []),
+    }));
+  }
+
+  private normalizeSteeringReview(value: unknown): InterviewerSteeringReview {
+    const item = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+
+    return {
+      successfulSteering: this.normalizeStringArray(item.successfulSteering, []),
+      failedSteering: this.normalizeStringArray(item.failedSteering, []),
+      nextTimeTactics: this.normalizeStringArray(item.nextTimeTactics, [
+        '先正面回答当前问题，再自然补充一个项目证据。',
+        '引导到优势点时必须带上事实、指标和个人贡献。',
+      ]),
+    };
+  }
+
   private normalizeStringArray(value: unknown, fallback: string[]) {
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : fallback;
+  }
+
+  private readArrayObjects(value: unknown): Array<Record<string, unknown>> {
+    return Array.isArray(value)
+      ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      : [];
+  }
+
+  private readJsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as unknown as Record<string, unknown>
+      : undefined;
+  }
+
+  private toText(value: unknown, fallback: string) {
+    return typeof value === 'string' && value.trim() ? value.trim() : fallback;
   }
 
   private parseJsonObject(content: string): Record<string, unknown> {
@@ -683,11 +893,16 @@ export class ReportsService {
     score: number;
     level: string;
     summary: string;
+    generatedBy?: string;
+    sessionId?: string | null;
     createdAt: Date;
     dimensions: Prisma.JsonValue;
     questions: Prisma.JsonValue;
     nextActions: Prisma.JsonValue;
     topDirections?: Prisma.JsonValue | null;
+    advantageSummary?: Prisma.JsonValue | null;
+    weaknessSummary?: Prisma.JsonValue | null;
+    interviewerSteeringReview?: Prisma.JsonValue | null;
   }) {
     return {
       reportId: report.id,
@@ -695,11 +910,20 @@ export class ReportsService {
       score: report.score,
       level: report.level,
       summary: report.summary,
+      generatedBy: report.generatedBy ?? 'ai',
+      sessionId: report.sessionId ?? null,
       createdAt: report.createdAt.toISOString(),
       dimensions: report.dimensions,
       questions: report.questions,
       nextActions: report.nextActions,
       topDirections: report.topDirections ?? [],
+      advantageSummary: report.advantageSummary ?? [],
+      weaknessSummary: report.weaknessSummary ?? [],
+      interviewerSteeringReview: report.interviewerSteeringReview ?? {
+        successfulSteering: [],
+        failedSteering: [],
+        nextTimeTactics: [],
+      },
     };
   }
 }

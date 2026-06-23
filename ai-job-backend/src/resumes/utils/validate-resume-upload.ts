@@ -21,14 +21,13 @@ export function assertResumeFile(file: Express.Multer.File, kind: ResumeUploadKi
   const isPdf = head.startsWith(PDF_MAGIC);
   const isDocx = head.startsWith(ZIP_MAGIC) && lower.endsWith('.docx');
   const isLegacyDoc = lower.endsWith('.doc');
-  const isMarkdown = lower.endsWith('.md') || lower.endsWith('.markdown');
 
   if (kind === 'parse' && !isPdf && !isDocx) {
     throw new BadRequestException('请上传真实的 PDF 或 DOCX 简历文件');
   }
 
-  if (kind === 'preview' && !isPdf && !isDocx && !isLegacyDoc && !isMarkdown) {
-    throw new BadRequestException('请上传真实的 PDF、DOC、DOCX 或 Markdown 简历文件');
+  if (kind === 'preview' && !isPdf && !isDocx && !isLegacyDoc) {
+    throw new BadRequestException('请上传真实的 PDF、DOC 或 DOCX 简历文件');
   }
 
   return filename;

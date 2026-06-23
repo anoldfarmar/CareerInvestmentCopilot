@@ -731,7 +731,7 @@ export class ResumesService {
       structure,
     );
 
-    return {
+    const result = {
       resumeId: id,
       totalScore,
       summary:
@@ -754,6 +754,15 @@ export class ResumesService {
         severity: index < 3 ? 'high' : 'medium',
       })),
     };
+
+    await this.prisma.resume.update({
+      where: { id },
+      data: {
+        jdMatchResult: result as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return result;
   }
 
   private flattenResumeText(value: unknown): string {

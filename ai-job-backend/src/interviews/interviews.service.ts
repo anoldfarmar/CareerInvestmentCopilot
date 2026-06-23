@@ -7,7 +7,7 @@ import { AddInterviewQuestionDto } from './dto/add-interview-question.dto';
 import { CreateInterviewSessionDto } from './dto/create-interview-session.dto';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { SubmitQuestionFeedbackDto } from './dto/submit-question-feedback.dto';
-import { InterviewAiService, type InterviewKnowledgeSnippet } from './interview-ai.service';
+import { InterviewAiService, type InterviewKnowledgeSnippet, type InterviewStrategySnapshot } from './interview-ai.service';
 import { InterviewRagService, type RagRecord } from './interview-rag.service';
 
 type InterviewQuestionDifficulty = 'easy' | 'medium' | 'hard';
@@ -82,6 +82,7 @@ export class InterviewsService {
 
     const resumeContext = await this.loadResumeContext(userId, data.resumeId);
     const questions = await this.buildQuestionPlanWithAi(userId, data, resumeContext);
+    const strategySnapshot = await this.buildStrategySnapshot(userId, data, resumeContext, questions);
     const firstQuestion = this.findFirstActiveQuestion(questions);
     const session = await this.prisma.interviewSession.create({
       data: {
@@ -93,13 +94,13 @@ export class InterviewsService {
         knowledgeBaseIds: data.knowledgeBaseIds ?? [],
         questions: questions as unknown as Prisma.InputJsonValue,
         questionFeedback: {},
+        strategySnapshot: strategySnapshot as unknown as Prisma.InputJsonValue,
         messages: firstQuestion
           ? [this.createAssistantMessage('pending', firstQuestion)] satisfies InterviewMessage[]
           : [],
         userId,
       },
     });
-
     await this.activityService?.incrementMockInterview(userId, session.startedAt);
 
     this.logger.log(
@@ -139,6 +140,7 @@ export class InterviewsService {
       const aiQuestions = await this.interviewAiService.generateQuestionPlan({
         interviewType: data.interviewType,
         questionCount: data.questionCount,
+        difficulty: data.difficulty,
         jobDescription: data.jobDescription,
         resumeContext: resumeContext
           ? {
@@ -170,6 +172,129 @@ export class InterviewsService {
       this.logger.warn(`DeepSeek 面试题生成失败，已回落到规则题：${error instanceof Error ? error.message : String(error)}`);
       return fallbackQuestions;
     }
+  }
+
+  private async buildStrategySnapshot(
+    userId: number,
+    data: CreateInterviewSessionDto,
+    resumeContext: ResumeInterviewContext | undefined,
+    questions: InterviewQuestionPreview[],
+  ): Promise<InterviewStrategySnapshot> {
+    const fallbackStrategy = this.buildLocalStrategySnapshot(data, resumeContext, questions);
+
+    if (!this.interviewAiService) {
+      return fallbackStrategy;
+    }
+
+    try {
+      const startedAt = Date.now();
+      const retrievalQuery = this.buildRetrievalQuery(data, resumeContext);
+      const knowledgeSnippets = await this.loadKnowledgeSnippets(
+        userId,
+        data.knowledgeBaseIds ?? [],
+        retrievalQuery,
+        resumeContext,
+        data.jobDescription,
+      );
+      const strategy = await this.interviewAiService.generateInterviewStrategy({
+        interviewType: data.interviewType,
+        questionCount: data.questionCount,
+        jobDescription: data.jobDescription,
+        resumeContext: resumeContext
+          ? {
+              title: resumeContext.title,
+              focus: resumeContext.focus,
+              text: resumeContext.text.slice(0, 3000),
+            }
+          : undefined,
+        questions,
+        knowledgeSnippets,
+      });
+
+      this.logger.log(
+        JSON.stringify({
+          event: 'interview.strategy.ai.done',
+          userId,
+          advantageCount: strategy.advantageProfile.length,
+          weaknessCount: strategy.weaknessProfile.length,
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+      return strategy;
+    } catch (error) {
+      this.logger.warn(`DeepSeek 面试策略生成失败，已使用本地策略：${error instanceof Error ? error.message : String(error)}`);
+      return fallbackStrategy;
+    }
+  }
+
+  private buildLocalStrategySnapshot(
+    data: CreateInterviewSessionDto,
+    resumeContext: ResumeInterviewContext | undefined,
+    questions: InterviewQuestionPreview[],
+  ): InterviewStrategySnapshot {
+    const hasJobDescription = Boolean(data.jobDescription?.trim());
+    const hasKnowledgeBase = Boolean(data.knowledgeBaseIds?.length);
+    const focus = resumeContext?.focus ?? '项目经历和岗位匹配表达';
+    const sourceLabels = [...new Set(questions.map((question) => question.sourceLabel).filter(Boolean))];
+
+    return {
+      version: 'v1',
+      generatedAt: new Date().toISOString(),
+      advantageProfile: [
+        {
+          area: focus,
+          evidence: [
+            resumeContext ? `已关联简历《${resumeContext.title}》` : '本轮未关联可分析简历',
+            hasJobDescription ? '本轮提供了目标 JD，可围绕岗位关键词展开' : '本轮未提供 JD，先训练通用表达',
+            hasKnowledgeBase ? '已选择真实面试知识库，可复用历史面试经验' : '未选择知识库，优先用简历和当前回答训练',
+          ],
+          jdRelevance: hasJobDescription ? '需要把简历亮点映射到 JD 中的职责、技能和业务场景。' : '建议补充目标 JD，让优势更贴近真实岗位。',
+          confidence: resumeContext ? 0.72 : 0.55,
+          interviewerHooks: [
+            '请展开一个最能证明该优势的项目细节。',
+            '你在这个成果中的个人贡献边界是什么？',
+            '如果面试官继续追问指标和取舍，你会怎么证明？',
+          ],
+          candidateSteeringSentences: [
+            `这个问题我可以结合${focus}里的一个具体经历来说明。`,
+            '我先回答结论，再补充一个和目标岗位更相关的项目例子。',
+          ],
+        },
+      ],
+      weaknessProfile: [
+        {
+          area: '回答证据密度',
+          risk: '如果只讲结论、不讲事实和指标，真实面试中容易被认为项目深度不足。',
+          triggerQuestions: [
+            '这个项目里你具体负责哪一块？',
+            '最后怎么证明你的方案有效？',
+          ],
+          repairActions: [
+            '每道题至少补充 1 个具体动作。',
+            '尽量补充规模、耗时、效率、转化率或稳定性指标。',
+          ],
+        },
+        {
+          area: hasJobDescription ? 'JD 贴合度' : '目标岗位信息不足',
+          risk: hasJobDescription ? '回答如果不映射 JD，优势会显得泛泛而谈。' : '没有 JD 时，题目只能偏通用，训练针对性会下降。',
+          triggerQuestions: sourceLabels.length ? sourceLabels : ['为什么你适合这个岗位？'],
+          repairActions: hasJobDescription
+            ? ['回答时主动提到 JD 中的关键词，并绑定自己的项目证据。']
+            : ['下一轮建议粘贴目标 JD，再做岗位专项追问。'],
+        },
+      ],
+      interviewStrategy: {
+        mainGoal: '暴露短板，同时训练把优势自然引导到岗位相关证据上。',
+        questionMix: {
+          advantageVerification: 30,
+          weaknessExposure: 40,
+          jdFit: hasJobDescription ? 20 : 10,
+          pressureTest: hasKnowledgeBase ? 10 : 20,
+        },
+        allowedSteeringRule: '用户可以把回答自然引导到优势经历，但必须与当前问题、简历证据或 JD 有明确关联。',
+        antiDriftRule: '如果用户强行转移到无关经历，AI 面试官应礼貌拉回当前问题，继续追问事实、指标和个人贡献。',
+      },
+    };
   }
 
   async findSession(userId: number, sessionId: string) {
@@ -270,17 +395,18 @@ export class InterviewsService {
       return this.toSessionResponse(session);
     }
 
-    const messages = this.readMessages(session.messages);
-    messages.push(this.createMessage('user', data.answer, session.id));
-
     const questions = this.readQuestions(session.questions);
     const currentQuestion = this.findQuestionByOrder(questions, session.currentQuestion);
+    const messages = this.readMessages(session.messages);
+    messages.push(this.createMessage('user', data.answer, session.id, currentQuestion?.id));
+
     const followUpMessage = await this.createFollowUpQuestionMessage(
       session.id,
       currentQuestion,
       data.answer,
       session.jobDescription ?? undefined,
       messages,
+      this.readStrategySnapshot(session.strategySnapshot),
     );
     if (followUpMessage) {
       messages.push(followUpMessage);
@@ -331,6 +457,7 @@ export class InterviewsService {
     answer: string,
     jobDescription: string | undefined,
     messages: InterviewMessage[],
+    strategySnapshot?: InterviewStrategySnapshot,
   ): Promise<InterviewMessage | undefined> {
     if (!question) {
       return undefined;
@@ -349,6 +476,7 @@ export class InterviewsService {
           role: message.role === 'assistant' ? 'assistant' : 'user',
           content: message.content,
         })),
+        strategySnapshot,
       });
 
       return {
@@ -796,6 +924,7 @@ export class InterviewsService {
       this.buildQuestion({
         type: dimension,
         order: index + 1,
+        difficulty: data.difficulty,
         jobDescription: data.jobDescription,
         knowledgeBaseCount,
         resumeContext,
@@ -815,6 +944,7 @@ export class InterviewsService {
   private buildQuestion(params: {
     type: string;
     order: number;
+    difficulty?: InterviewQuestionDifficulty;
     jobDescription?: string;
     resumeContext?: ResumeInterviewContext;
     knowledgeBaseCount?: number;
@@ -873,8 +1003,8 @@ export class InterviewsService {
       content: `第 ${params.order} 题：${baseQuestion} ${hint}`.trim(),
       dimension: params.type,
       dimensionLabel: this.getDimensionLabel(params.type),
-      difficulty: this.getDifficulty(params.type, params.order),
-      difficultyLabel: this.getDifficultyLabel(this.getDifficulty(params.type, params.order)),
+      difficulty: this.getDifficulty(params.type, params.order, params.difficulty),
+      difficultyLabel: this.getDifficultyLabel(this.getDifficulty(params.type, params.order, params.difficulty)),
       sourceType,
       sourceLabel: this.getSourceLabel(sourceType),
       skipped: false,
@@ -909,7 +1039,10 @@ export class InterviewsService {
     return labels[type] ?? '综合问题';
   }
 
-  private getDifficulty(type: string, order: number): InterviewQuestionDifficulty {
+  private getDifficulty(type: string, order: number, preferredDifficulty?: InterviewQuestionDifficulty): InterviewQuestionDifficulty {
+    if (preferredDifficulty) {
+      return preferredDifficulty;
+    }
     if (type === 'stress' || order >= 7) {
       return 'hard';
     }
@@ -1026,6 +1159,14 @@ export class InterviewsService {
     return value.filter((item): item is string => typeof item === 'string');
   }
 
+  private readStrategySnapshot(value: Prisma.JsonValue | null): InterviewStrategySnapshot | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+    const snapshot = value as unknown as InterviewStrategySnapshot;
+    return snapshot.version === 'v1' ? snapshot : undefined;
+  }
+
   private countWords(content: string) {
     const chineseChars = content.match(/[\u4e00-\u9fa5]/g)?.length ?? 0;
     const englishWords = content.match(/[a-zA-Z0-9]+/g)?.length ?? 0;
@@ -1042,6 +1183,7 @@ export class InterviewsService {
     messages: Prisma.JsonValue;
     questions?: Prisma.JsonValue | null;
     questionFeedback?: Prisma.JsonValue | null;
+    strategySnapshot?: Prisma.JsonValue | null;
     knowledgeBaseIds: Prisma.JsonValue | null;
     resumeId?: number | null;
   }) {
@@ -1056,6 +1198,7 @@ export class InterviewsService {
       messages: this.readMessages(session.messages),
       questionsPreview: questions,
       questionFeedback: this.readQuestionFeedback(session.questionFeedback ?? null),
+      strategySnapshot: this.readStrategySnapshot(session.strategySnapshot ?? null),
       knowledgeBaseIds: this.readKnowledgeBaseIds(session.knowledgeBaseIds),
       resumeId: session.resumeId ?? undefined,
     };

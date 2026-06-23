@@ -1,14 +1,12 @@
-import { BadGatewayException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { BadGatewayException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { extractJsonObject } from '../common/ai/json.util';
 import { externalFetch } from '../common/http/external-http.client';
 import type { InterviewQuestionPreview } from './interviews.service';
 
 type DeepseekChatResponse = {
   choices?: Array<{
-    finish_reason?: string;
     message?: {
       content?: string;
-      reasoning_content?: string;
     };
   }>;
   error?: {
@@ -58,15 +56,45 @@ export type InterviewFollowUpQuestionResult = {
   question: string;
 };
 
+export type InterviewStrategySnapshot = {
+  version: 'v1';
+  generatedAt: string;
+  advantageProfile: Array<{
+    area: string;
+    evidence: string[];
+    jdRelevance: string;
+    confidence: number;
+    interviewerHooks: string[];
+    candidateSteeringSentences: string[];
+  }>;
+  weaknessProfile: Array<{
+    area: string;
+    risk: string;
+    triggerQuestions: string[];
+    repairActions: string[];
+  }>;
+  interviewStrategy: {
+    mainGoal: string;
+    questionMix: {
+      advantageVerification: number;
+      weaknessExposure: number;
+      jdFit: number;
+      pressureTest: number;
+    };
+    allowedSteeringRule: string;
+    antiDriftRule: string;
+  };
+};
+
 @Injectable()
 export class InterviewAiService {
-  private readonly logger = new Logger(InterviewAiService.name);
   private readonly baseUrl = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com';
   private readonly model = process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-pro';
 
   async generateQuestionPlan(input: {
     interviewType: string;
     questionCount: number;
+    difficulty?: 'easy' | 'medium' | 'hard';
     jobDescription?: string;
     resumeContext?: {
       title: string;
@@ -123,6 +151,66 @@ export class InterviewAiService {
     };
   }
 
+  async generateInterviewStrategy(input: {
+    interviewType: string;
+    questionCount: number;
+    jobDescription?: string;
+    resumeContext?: {
+      title: string;
+      focus: string;
+      text: string;
+    };
+    questions: InterviewQuestionPreview[];
+    knowledgeSnippets: InterviewKnowledgeSnippet[];
+  }): Promise<InterviewStrategySnapshot> {
+    const content = await this.chatJson(
+      this.createInterviewStrategySystemPrompt(),
+      this.createInterviewStrategyUserPrompt(input),
+    );
+    const parsed = this.parseJsonObject(content);
+
+    return {
+      version: 'v1',
+      generatedAt: new Date().toISOString(),
+      advantageProfile: this.toArray(parsed.advantageProfile).map((item) => ({
+        area: this.toText(item.area, '可放大的优势点'),
+        evidence: this.toStringArray(item.evidence),
+        jdRelevance: this.toText(item.jdRelevance, '需要结合目标岗位继续验证'),
+        confidence: this.toConfidence(item.confidence),
+        interviewerHooks: this.toStringArray(item.interviewerHooks),
+        candidateSteeringSentences: this.toStringArray(item.candidateSteeringSentences),
+      })).slice(0, 5),
+      weaknessProfile: this.toArray(parsed.weaknessProfile).map((item) => ({
+        area: this.toText(item.area, '需要补强的能力点'),
+        risk: this.toText(item.risk, '真实面试中可能被继续追问'),
+        triggerQuestions: this.toStringArray(item.triggerQuestions),
+        repairActions: this.toStringArray(item.repairActions),
+      })).slice(0, 5),
+      interviewStrategy: {
+        mainGoal: this.toText(parsed.interviewStrategy && typeof parsed.interviewStrategy === 'object' && !Array.isArray(parsed.interviewStrategy)
+          ? (parsed.interviewStrategy as Record<string, unknown>).mainGoal
+          : undefined, '暴露短板，同时训练把优势讲清楚'),
+        questionMix: this.normalizeQuestionMix(
+          parsed.interviewStrategy && typeof parsed.interviewStrategy === 'object' && !Array.isArray(parsed.interviewStrategy)
+            ? (parsed.interviewStrategy as Record<string, unknown>).questionMix
+            : undefined,
+        ),
+        allowedSteeringRule: this.toText(
+          parsed.interviewStrategy && typeof parsed.interviewStrategy === 'object' && !Array.isArray(parsed.interviewStrategy)
+            ? (parsed.interviewStrategy as Record<string, unknown>).allowedSteeringRule
+            : undefined,
+          '候选人可以自然引导到优势点，但必须与当前问题、简历证据或 JD 有合理关联。',
+        ),
+        antiDriftRule: this.toText(
+          parsed.interviewStrategy && typeof parsed.interviewStrategy === 'object' && !Array.isArray(parsed.interviewStrategy)
+            ? (parsed.interviewStrategy as Record<string, unknown>).antiDriftRule
+            : undefined,
+          '如果候选人强行转移到无关主题，面试官应礼貌拉回当前问题。',
+        ),
+      },
+    };
+  }
+
   async evaluateAnswer(input: {
     question: InterviewQuestionPreview;
     answer: string;
@@ -149,6 +237,7 @@ export class InterviewAiService {
     answer: string;
     jobDescription?: string;
     recentMessages: Array<{ role: 'assistant' | 'user'; content: string }>;
+    strategySnapshot?: InterviewStrategySnapshot;
   }): Promise<InterviewFollowUpQuestionResult> {
     const content = await this.chatJson(
       this.createFollowUpQuestionSystemPrompt(),
@@ -177,6 +266,7 @@ export class InterviewAiService {
   private createInterviewUserPrompt(input: {
     interviewType: string;
     questionCount: number;
+    difficulty?: 'easy' | 'medium' | 'hard';
     jobDescription?: string;
     resumeContext?: {
       title: string;
@@ -191,6 +281,7 @@ export class InterviewAiService {
       task: 'generate_interview_questions',
       interviewType: input.interviewType,
       questionCount: input.questionCount,
+      targetDifficulty: input.difficulty ?? 'medium',
       language: input.language ?? 'zh-CN',
       enableFollowUp: input.enableFollowUp ?? true,
       jobDescription: input.jobDescription ?? '',
@@ -242,6 +333,9 @@ export class InterviewAiService {
       '当前处于同一道题的多轮追问阶段。你不能给评分，不能总结优缺点，不能说“回答得不错”。',
       '你的任务是基于候选人刚才的回答，继续提出一个有压力、有针对性的追问。',
       '追问应围绕：事实细节、技术取舍、量化结果、个人贡献、失败复盘、边界条件、团队协作。',
+      '你可以接受候选人把话题自然引导到自己的优势点，但前提是该优势与当前题目、简历证据或目标 JD 有明确关联。',
+      '如果候选人强行转移到无关经历、回避当前问题或绕开 JD 核心要求，你必须礼貌拉回当前问题继续追问。',
+      '不要被候选人盲目带偏；最终仍要验证岗位匹配度、能力真实性和表达可信度。',
       '如果回答很泛，要追问具体背景、行动和结果；如果回答较完整，要追问指标、权衡或反事实。',
       '严格返回 JSON object，不要 Markdown，不要解释。',
       'JSON 格式：{"question":"面试官下一句追问，40-120字"}',
@@ -253,6 +347,7 @@ export class InterviewAiService {
     answer: string;
     jobDescription?: string;
     recentMessages: Array<{ role: 'assistant' | 'user'; content: string }>;
+    strategySnapshot?: InterviewStrategySnapshot;
   }) {
     return JSON.stringify({
       task: 'generate_interview_follow_up_question',
@@ -266,6 +361,14 @@ export class InterviewAiService {
       latestAnswer: input.answer,
       jobDescription: input.jobDescription ?? '',
       recentMessages: input.recentMessages.slice(-8),
+      strategySnapshot: input.strategySnapshot
+        ? {
+            advantageProfile: input.strategySnapshot.advantageProfile.slice(0, 4),
+            weaknessProfile: input.strategySnapshot.weaknessProfile.slice(0, 4),
+            allowedSteeringRule: input.strategySnapshot.interviewStrategy.allowedSteeringRule,
+            antiDriftRule: input.strategySnapshot.interviewStrategy.antiDriftRule,
+          }
+        : null,
     });
   }
 
@@ -290,37 +393,9 @@ export class InterviewAiService {
   }
 
   private async chatJson(systemPrompt: string, userPrompt: string) {
-    const content = await this.requestChat(systemPrompt, userPrompt, true);
-    if (content) {
-      return content;
-    }
-
-    this.logger.warn('DeepSeek JSON mode 返回空内容，自动切换普通模式重试。');
-    const retryContent = await this.requestChat(systemPrompt, userPrompt, false);
-    if (retryContent) {
-      return retryContent;
-    }
-
-    throw new BadGatewayException('DeepSeek 没有返回 JSON 内容');
-  }
-
-  private async requestChat(systemPrompt: string, userPrompt: string, jsonMode: boolean) {
     const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
       throw new InternalServerErrorException('缺少 DEEPSEEK_API_KEY，请检查 .env 文件');
-    }
-
-    const body: Record<string, unknown> = {
-      model: this.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.2,
-    };
-
-    if (jsonMode) {
-      body.response_format = { type: 'json_object' };
     }
 
     const response = await externalFetch(`${this.baseUrl}/chat/completions`, {
@@ -332,7 +407,15 @@ export class InterviewAiService {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+      }),
     });
 
     const result = (await response.json()) as DeepseekChatResponse;
@@ -340,20 +423,9 @@ export class InterviewAiService {
       throw new BadGatewayException(result.error?.message ?? 'AI 面试服务繁忙，请稍后重试');
     }
 
-    const choice = result.choices?.[0];
-    const content = choice?.message?.content?.trim();
+    const content = result.choices?.[0]?.message?.content;
     if (!content) {
-      this.logger.warn(
-        JSON.stringify({
-          event: 'deepseek.empty_content',
-          model: this.model,
-          jsonMode,
-          finishReason: choice?.finish_reason,
-          hasReasoningContent: Boolean(choice?.message?.reasoning_content?.trim()),
-          choiceCount: result.choices?.length ?? 0,
-        }),
-      );
-      return '';
+      throw new BadGatewayException('DeepSeek 没有返回 JSON 内容');
     }
 
     return content;
@@ -436,6 +508,86 @@ export class InterviewAiService {
       return 6;
     }
     return Math.min(Math.max(Math.round(score), 1), 10);
+  }
+
+  private toConfidence(value: unknown) {
+    const confidence = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(confidence)) {
+      return 0.6;
+    }
+    return Math.min(Math.max(confidence, 0), 1);
+  }
+
+  private normalizeQuestionMix(value: unknown) {
+    const mix = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+
+    return {
+      advantageVerification: this.toPercent(mix.advantageVerification, 30),
+      weaknessExposure: this.toPercent(mix.weaknessExposure, 40),
+      jdFit: this.toPercent(mix.jdFit, 20),
+      pressureTest: this.toPercent(mix.pressureTest, 10),
+    };
+  }
+
+  private toPercent(value: unknown, fallback: number) {
+    const percent = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(percent)) {
+      return fallback;
+    }
+    return Math.min(Math.max(Math.round(percent), 0), 100);
+  }
+
+  private createInterviewStrategySystemPrompt() {
+    return [
+      '你是一名求职面试策略教练，不是面试官。',
+      '你的任务是根据候选人的简历、目标 JD、真实面试知识库和即将进行的题目，生成本轮模拟面试训练策略。',
+      '优势必须有证据，不允许凭空夸；短板必须能映射到岗位要求或面试风险。',
+      '引导话术必须自然，不能建议造假，只能建议候选人重组表达顺序。',
+      '你要区分有效引导和逃避问题：有效引导必须与当前问题、简历证据或 JD 相关；逃避问题要被面试官拉回。',
+      '严格返回 JSON object，不要 Markdown，不要解释。',
+      'JSON 格式：{"advantageProfile":[{"area":"优势方向","evidence":["证据"],"jdRelevance":"与JD关联","confidence":0.8,"interviewerHooks":["面试官可深挖切口"],"candidateSteeringSentences":["候选人自然引导话术"]}],"weaknessProfile":[{"area":"短板方向","risk":"风险","triggerQuestions":["触发问题"],"repairActions":["修复动作"]}],"interviewStrategy":{"mainGoal":"本轮训练目标","questionMix":{"advantageVerification":30,"weaknessExposure":40,"jdFit":20,"pressureTest":10},"allowedSteeringRule":"允许引导规则","antiDriftRule":"防跑偏规则"}}',
+    ].join('\n');
+  }
+
+  private createInterviewStrategyUserPrompt(input: {
+    interviewType: string;
+    questionCount: number;
+    jobDescription?: string;
+    resumeContext?: {
+      title: string;
+      focus: string;
+      text: string;
+    };
+    questions: InterviewQuestionPreview[];
+    knowledgeSnippets: InterviewKnowledgeSnippet[];
+  }) {
+    return JSON.stringify({
+      task: 'generate_interview_strategy_snapshot',
+      interviewType: input.interviewType,
+      questionCount: input.questionCount,
+      jobDescription: input.jobDescription ?? '',
+      resumeContext: input.resumeContext
+        ? {
+            title: input.resumeContext.title,
+            focus: input.resumeContext.focus,
+            text: input.resumeContext.text.slice(0, 3000),
+          }
+        : null,
+      questions: input.questions.map((question) => ({
+        id: question.id,
+        content: question.content,
+        dimension: question.dimension,
+        difficulty: question.difficulty,
+        sourceType: question.sourceType,
+      })),
+      knowledgeSnippets: input.knowledgeSnippets.map((snippet) => ({
+        title: snippet.title,
+        transcript: snippet.transcript.slice(0, 1200),
+        chunks: snippet.chunks ?? null,
+      })),
+    });
   }
 
   private toSourceType(value: unknown, fallback: 'rule' | 'resume' | 'job_description' | 'knowledge_base') {

@@ -1,39 +1,40 @@
 # Dependencies
 node_modules/
-.pnpm-store/
-.corepack/
-.npm-cache/
-**/.npm-cache/
 
-# Build output
+# Build outputs
 dist/
 build/
-.vite/
 coverage/
-
-# Runtime uploaded files
-ai-job-backend/public/resume/
-ai-job-backend/public/audio/
-ai-job-backend/storage/
-
-# Deprecated / unused frontend prototype
-front_pages/
+.nyc_output/
 
 # Logs
+logs/
 *.log
 npm-debug.log*
-yarn-debug.log*
 pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Local environment and secrets
+# Environment and local secrets
 .env
 .env.*
+.env*
 !.env.example
 *_api_key.txt
 
-# OS and editor files
+# Runtime/generated data
+storage/
+.temp/
+.tmp/
+tmp/
+pids/
+*.pid
+*.seed
+*.pid.lock
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Editors/OS
 .DS_Store
-Thumbs.db
 .idea/
 .vscode/*
 !.vscode/settings.json
@@ -41,5 +42,6 @@ Thumbs.db
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# Temporary publish workspace
-.publish/
+# Nested/local git metadata backups
+*.git-backup/
+*.git.local/

@@ -43,7 +43,7 @@ export class JwtAuthGuard implements CanActivate {
         throw new UnauthorizedException('登录状态已失效');
       }
 
-      request.user = user as unknown as AuthUser;
+      request.user = user;
       return true;
     } catch {
       throw new UnauthorizedException('登录状态已失效，请重新登录');

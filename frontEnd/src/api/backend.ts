@@ -1,5 +1,5 @@
 import { ActivityDay, InterviewReport, InterviewSession, Job, Resume } from "../types";
-import { apiRequest, getAuthToken, setAuthToken } from "./client";
+import { API_BASE_URL, ApiError, apiRequest, getAuthToken, setAuthToken } from "./client";
 
 interface Paginated<T> {
   items: T[];
@@ -151,8 +151,6 @@ export interface BackendProfile {
   };
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3001";
-
 export interface BackendOverview {
   kpis: Array<{ label: string; value: number; unit: string }>;
   recentReportTitle: string;
@@ -204,6 +202,16 @@ export async function register(email: string, password: string, name?: string) {
   return result;
 }
 
+const allowedJobStatuses = new Set([
+  "draft",
+  "interested",
+  "applied",
+  "interviewing",
+  "offer",
+  "rejected",
+  "archived",
+]);
+
 export const backendApi = {
   me: () => apiRequest("/auth/me"),
   overview: () => apiRequest<BackendOverview>("/overview"),
@@ -221,7 +229,7 @@ export const backendApi = {
   }) =>
     apiRequest<BackendJob>("/jobs", {
       method: "POST",
-      body: input,
+      body: toCreateJobBody(input),
     }),
   updateJob: (
     id: string | number,
@@ -239,7 +247,7 @@ export const backendApi = {
   ) =>
     apiRequest<BackendJob>(`/jobs/${id}`, {
       method: "PATCH",
-      body: input,
+      body: toUpdateJobBody(input),
     }),
   deleteJob: (id: string | number) =>
     apiRequest<BackendJob>(`/jobs/${id}`, {
@@ -265,7 +273,7 @@ export const backendApi = {
   updateProfile: (input: Partial<BackendProfile>) =>
     apiRequest<BackendProfile>("/profile", {
       method: "PUT",
-      body: input,
+      body: toProfileBody(input),
     }),
   deleteProfile: () =>
     apiRequest<BackendProfile>("/profile", {
@@ -275,7 +283,7 @@ export const backendApi = {
   createKnowledgeBase: (input: { name: string; description?: string; focusAreas?: string[] }) =>
     apiRequest<BackendKnowledgeBase>("/interview-knowledge-bases", {
       method: "POST",
-      body: input,
+      body: toKnowledgeBaseBody(input),
     }),
   knowledgeBase: (id: string) =>
     apiRequest<BackendKnowledgeBase>(`/interview-knowledge-bases/${id}`),
@@ -289,7 +297,7 @@ export const backendApi = {
   ) =>
     apiRequest<BackendKnowledgeRecord>(`/interview-knowledge-bases/${knowledgeBaseId}/records/manual`, {
       method: "POST",
-      body: input,
+      body: toManualRecordBody(input),
     }),
   buildKnowledgeRecord: (knowledgeBaseId: string, recordId: string) =>
     apiRequest<BackendKnowledgeRecord>(
@@ -306,13 +314,30 @@ export const backendApi = {
     interviewDate: string;
     file: File;
     onUploadProgress?: (progress: number) => void;
-  }) => {
+  }) => uploadAudioReviewThroughKnowledgeBase(input),
+  transcribeKnowledgeRecord: (knowledgeBaseId: string, recordId: string, audioUrl?: string) =>
+    apiRequest<BackendKnowledgeRecord>(
+      `/interview-knowledge-bases/${knowledgeBaseId}/records/${recordId}/transcribe`,
+      {
+        method: "POST",
+        body: audioUrl ? { audioUrl } : {},
+      },
+    ),
+  uploadKnowledgeAudioRecord: (
+    knowledgeBaseId: string,
+    input: {
+      title: string;
+      interviewDate: string;
+      file: File;
+      onUploadProgress?: (progress: number) => void;
+    },
+  ) => {
     const formData = new FormData();
     formData.append("title", input.title);
     formData.append("interviewDate", input.interviewDate);
     formData.append("audioFile", input.file);
     return uploadFormWithProgress<BackendKnowledgeRecord>(
-      "/interview-knowledge-bases/records/audio/pipeline",
+      `/interview-knowledge-bases/${knowledgeBaseId}/records/audio`,
       formData,
       input.onUploadProgress,
     );
@@ -377,12 +402,7 @@ export const backendApi = {
       body: { sessionId },
     }),
   uploadResume: (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return apiRequest<BackendResume>("/resumes/upload", {
-      method: "POST",
-      body: formData,
-    });
+    return uploadResumeForParsing(file);
   },
   syncResumeParse: (id: string | number) => apiRequest<BackendResume>(`/resumes/${id}/parse`),
   structureResume: (id: string | number) =>
@@ -395,7 +415,7 @@ export const backendApi = {
   ) =>
     apiRequest<BackendResume>(`/resumes/${id}/optimize`, {
       method: "POST",
-      body: input,
+      body: toOptimizeResumeBody(input),
     }),
   finalizeResume: (id: string | number, label?: string) =>
     apiRequest<BackendResume>(`/resumes/${id}/finalize`, {
@@ -411,6 +431,182 @@ export const backendApi = {
       method: "DELETE",
     }),
 };
+
+function toCreateJobBody(input: {
+  title: string;
+  company?: string;
+  description: string;
+  sourceUrl?: string;
+  status?: string;
+  salary?: string;
+  location?: string;
+  notes?: string;
+  priority?: "normal" | "urgent";
+}) {
+  const sourceUrl = input.sourceUrl?.trim();
+  return {
+    title: input.title.trim(),
+    ...(input.company?.trim() ? { company: input.company.trim() } : {}),
+    description: input.description.trim(),
+    ...(sourceUrl && isHttpUrl(sourceUrl) ? { sourceUrl } : {}),
+    ...(input.status && allowedJobStatuses.has(input.status) ? { status: input.status } : {}),
+    ...(input.salary?.trim() ? { salary: input.salary.trim() } : {}),
+    ...(input.location?.trim() ? { location: input.location.trim() } : {}),
+    ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
+    ...(input.priority ? { priority: input.priority } : {}),
+  };
+}
+
+function toUpdateJobBody(input: Partial<{
+  title: string;
+  company: string;
+  description: string;
+  sourceUrl: string;
+  status: string;
+  salary: string;
+  location: string;
+  notes: string;
+  priority: "normal" | "urgent";
+}>) {
+  const sourceUrl = input.sourceUrl?.trim();
+  return {
+    ...(typeof input.title === "string" ? { title: input.title.trim() } : {}),
+    ...(typeof input.company === "string" ? { company: input.company.trim() } : {}),
+    ...(typeof input.description === "string" ? { description: input.description.trim() } : {}),
+    ...(typeof input.sourceUrl === "string" ? { sourceUrl: sourceUrl && isHttpUrl(sourceUrl) ? sourceUrl : undefined } : {}),
+    ...(input.status && allowedJobStatuses.has(input.status) ? { status: input.status } : {}),
+    ...(typeof input.salary === "string" ? { salary: input.salary.trim() } : {}),
+    ...(typeof input.location === "string" ? { location: input.location.trim() } : {}),
+    ...(typeof input.notes === "string" ? { notes: input.notes.trim() } : {}),
+    ...(input.priority ? { priority: input.priority } : {}),
+  };
+}
+
+function toProfileBody(input: Partial<BackendProfile>) {
+  return {
+    ...(typeof input.name === "string" ? { name: input.name } : {}),
+    ...(typeof input.jobMode === "string" ? { jobMode: input.jobMode } : {}),
+    ...(typeof input.targetDirection === "string" ? { targetDirection: input.targetDirection } : {}),
+    ...(Array.isArray(input.targetDirections) ? { targetDirections: input.targetDirections } : {}),
+    ...(typeof input.customTargetDirection === "string"
+      ? { customTargetDirection: input.customTargetDirection }
+      : {}),
+    ...(typeof input.subscriptionPlan === "string" ? { subscriptionPlan: input.subscriptionPlan } : {}),
+    ...(typeof input.language === "string" ? { language: input.language } : {}),
+    ...(typeof input.questionCount === "number" ? { questionCount: input.questionCount } : {}),
+    ...(typeof input.enableVoiceInput === "boolean" ? { enableVoiceInput: input.enableVoiceInput } : {}),
+    ...(typeof input.showStarTips === "boolean" ? { showStarTips: input.showStarTips } : {}),
+  };
+}
+
+function toKnowledgeBaseBody(input: { name: string; description?: string; focusAreas?: string[] }) {
+  return {
+    name: input.name.trim(),
+    ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+    ...(Array.isArray(input.focusAreas) ? { focusAreas: input.focusAreas.filter(Boolean) } : {}),
+  };
+}
+
+function toManualRecordBody(input: { title: string; interviewDate: string; transcript?: string }) {
+  return {
+    title: input.title.trim(),
+    interviewDate: input.interviewDate,
+    ...(input.transcript?.trim() ? { transcript: input.transcript.trim() } : {}),
+  };
+}
+
+function toOptimizeResumeBody(input: { jobDescription?: string; additionalInstruction?: string }) {
+  return {
+    ...(input.jobDescription?.trim() ? { jobDescription: input.jobDescription.trim() } : {}),
+    ...(input.additionalInstruction?.trim()
+      ? { additionalInstruction: input.additionalInstruction.trim() }
+      : {}),
+  };
+}
+
+async function uploadResumeForParsing(file: File) {
+  const created = await apiRequest<BackendResume>("/resumes", {
+    method: "POST",
+    body: { title: file.name },
+  });
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    return await apiRequest<BackendResume>(`/resumes/${created.id}/parse/upload`, {
+      method: "POST",
+      body: formData,
+    });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 400) {
+      return {
+        ...created,
+        parseStatus: "unsupported",
+      };
+    }
+    throw error;
+  }
+}
+
+async function uploadAudioReviewThroughKnowledgeBase(input: {
+  title: string;
+  interviewDate: string;
+  file: File;
+  onUploadProgress?: (progress: number) => void;
+}) {
+  const knowledgeBase = await ensureAudioReviewKnowledgeBase();
+  const uploaded = await backendApi.uploadKnowledgeAudioRecord(knowledgeBase.id, input);
+
+  if (!uploaded.audioUrl) {
+    return uploaded;
+  }
+
+  try {
+    const transcribed = await backendApi.transcribeKnowledgeRecord(
+      knowledgeBase.id,
+      uploaded.id,
+      uploaded.audioUrl,
+    );
+
+    if (transcribed.status !== "ready" || !transcribed.transcript?.trim()) {
+      return transcribed;
+    }
+
+    return await backendApi.buildKnowledgeRecord(knowledgeBase.id, transcribed.id);
+  } catch {
+    return uploaded;
+  }
+}
+
+async function ensureAudioReviewKnowledgeBase() {
+  const list = await apiRequest<Paginated<BackendKnowledgeBase>>(
+    "/interview-knowledge-bases?page=1&pageSize=50",
+  );
+  const existing = list.items.find((item) => item.name === "Audio Reviews");
+
+  if (existing) {
+    return existing;
+  }
+
+  return apiRequest<BackendKnowledgeBase>("/interview-knowledge-bases", {
+    method: "POST",
+    body: {
+      name: "Audio Reviews",
+      description: "Uploaded interview audio reviews",
+      focusAreas: ["interview", "review"],
+    },
+  });
+}
+
+function isHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 function uploadFormWithProgress<T>(
   path: string,
@@ -479,17 +675,10 @@ export function mapBackendJob(job: BackendJob): Job {
   return {
     id: String(job.id),
     title: job.title,
-    company: job.company ?? "未知公司",
+    company: job.company,
     logoUrl: "",
-    logoAlt: job.company ?? "未知公司",
+    logoAlt: job.company,
     description: job.description ?? "暂无岗位描述",
-    sourceUrl: job.sourceUrl ?? undefined,
-    salary: job.salary ?? undefined,
-    location: job.location ?? undefined,
-    notes: job.notes ?? undefined,
-    priority: job.priority === "urgent" ? "urgent" : "normal",
-    status: job.status ?? undefined,
-    updatedAt: formatDate(job.updatedAt ?? job.createdAt),
     matchScore: statusToScore(job.status),
     tag: job.tags?.[0] ?? statusToLabel(job.status),
   };
@@ -615,7 +804,7 @@ function toDimensions(value: unknown) {
   });
 }
 
-function toQuestionReviews(value: unknown): InterviewReport["questions"] {
+function toQuestionReviews(value: unknown): NonNullable<InterviewReport["questions"]> {
   if (!Array.isArray(value)) return [];
   return value.map((item, index) => {
     const source = isRecord(item) ? item : {};
@@ -653,7 +842,7 @@ function toQaTranscript(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
     const source = isRecord(item) ? item : {};
-    const role = source.role === "user" ? "user" : "assistant";
+    const role: "assistant" | "user" = source.role === "user" ? "user" : "assistant";
     return {
       role,
       content: "content" in source ? String(source.content) : "",

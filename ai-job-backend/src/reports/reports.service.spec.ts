@@ -103,6 +103,7 @@ describe('ReportsService', () => {
       update: expect.any(Object),
     });
     expect(result.reportId).toBe('report-1');
+    expect(result.generatedBy).toBe('local');
     expect(result.questions[0]).toEqual(
       expect.objectContaining({
         id: 'q-1',
@@ -114,5 +115,56 @@ describe('ReportsService', () => {
         qaTranscript: expect.any(Array),
       }),
     );
+  });
+
+  it('本地兜底报告会暴露降级来源，并生成短答/缺少量化结果的引导建议', async () => {
+    const createdAt = new Date('2026-06-18T00:00:00.000Z');
+    prisma.interviewSession.findFirst.mockResolvedValue({
+      id: 'session-local',
+      type: 'professional',
+      totalQuestions: 1,
+      questions: [
+        {
+          id: 'q-1',
+          order: 1,
+          content: '请介绍一个你做过的项目。',
+          dimension: 'professional',
+          difficulty: 'medium',
+          sourceLabel: '基础智能问题',
+          skipped: false,
+        },
+      ],
+      messages: [
+        {
+          id: 'q-1',
+          role: 'assistant',
+          questionId: 'q-1',
+          content: '请介绍一个你做过的项目。',
+          createdAt: createdAt.toISOString(),
+        },
+        {
+          id: 'a-1',
+          role: 'user',
+          questionId: 'q-1',
+          content: '我做过一个后台管理项目，负责页面和接口联调。',
+          createdAt: createdAt.toISOString(),
+        },
+      ],
+    });
+    prisma.reviewReport.upsert.mockImplementation(({ create }) =>
+      Promise.resolve({
+        id: 'report-local',
+        ...create,
+        createdAt,
+      }),
+    );
+
+    const result = await service.generate(10, { sessionId: 'session-local' });
+
+    expect(result.generatedBy).toBe('local');
+    expect(result.sessionId).toBe('session-local');
+    expect(result.questions[0].issues).toEqual(expect.arrayContaining(['回答偏短', '缺少量化结果']));
+    expect(result.questions[0].steeringAdvice).toContain('指标');
+    expect(result.interviewerSteeringReview.failedSteering.length).toBeGreaterThan(0);
   });
 });

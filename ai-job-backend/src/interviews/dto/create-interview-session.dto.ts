@@ -38,6 +38,11 @@ export class CreateInterviewSessionDto {
   @Max(20, { message: 'questionCount 最多为 20' })
   questionCount!: number;
 
+  @ApiPropertyOptional({ description: '面试难度', enum: ['easy', 'medium', 'hard'], example: 'medium' })
+  @IsOptional()
+  @IsIn(['easy', 'medium', 'hard'], { message: 'difficulty 必须是 easy / medium / hard 之一' })
+  difficulty?: 'easy' | 'medium' | 'hard';
+
   // 是否启用追问。当前 MVP 会根据该字段调整提示语。
   @ApiPropertyOptional({ description: '是否启用追问', example: true })
   @IsOptional()

@@ -25,10 +25,10 @@ model User {
   jobs         Job[]
 
   profile      UserProfile?
+  dailyActivities DailyActivity[]
   knowledgeBases InterviewKnowledgeBase[]
   interviewSessions InterviewSession[]
   reviewReports ReviewReport[]
-  dailyActivities DailyActivity[]
 }
 
 // Resume 表示一份简历。
@@ -45,6 +45,7 @@ model Resume {
   optimizedContent  Json?
   draftContent      Json?
   finalizedContent  Json?
+  jdMatchResult     Json?
   finalizedAt       DateTime?
   optimizationVersion Int    @default(0)
   mineruTaskId      String?  @unique
@@ -166,6 +167,23 @@ model UserProfile {
   updatedAt        DateTime @updatedAt
 }
 
+model DailyActivity {
+  id                 Int      @id @default(autoincrement())
+  date               DateTime @db.Date
+  applicationCount   Int      @default(0)
+  audioUploadCount   Int      @default(0)
+  mockInterviewCount Int      @default(0)
+
+  userId             Int
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
 model InterviewKnowledgeBase {
   id          String   @id @default(cuid())
   name        String
@@ -224,6 +242,7 @@ model InterviewSession {
   knowledgeBaseIds Json?
   questions        Json?
   questionFeedback Json?
+  strategySnapshot Json?
   messages         Json
 
   userId           Int
@@ -247,10 +266,14 @@ model ReviewReport {
   score       Int
   level       String
   summary     String   @db.Text
+  generatedBy String   @default("ai")
   dimensions  Json
   questions   Json
   nextActions Json
   topDirections Json?
+  advantageSummary Json?
+  weaknessSummary Json?
+  interviewerSteeringReview Json?
 
   userId      Int
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -262,21 +285,4 @@ model ReviewReport {
   updatedAt   DateTime @updatedAt
 
   @@index([userId, createdAt])
-}
-
-model DailyActivity {
-  id                 Int      @id @default(autoincrement())
-  date               DateTime @db.Date
-  applicationCount   Int      @default(0)
-  audioUploadCount   Int      @default(0)
-  mockInterviewCount Int      @default(0)
-
-  userId             Int
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-
-  @@unique([userId, date])
-  @@index([userId, date])
 }
