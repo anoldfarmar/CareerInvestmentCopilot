@@ -1,5 +1,6 @@
 import { BadGatewayException, Injectable } from '@nestjs/common';
 import { externalFetch } from '../common/http/external-http.client';
+import { RESUME_PARSE_STATUS, type MineruResumeParseStatus } from './resume-status';
 
 type MineruResponse<T> = {
   code: number;
@@ -15,13 +16,7 @@ type CreateFileTaskData = {
 
 type MineruTaskData = {
   task_id: string;
-  state:
-    | 'waiting-file'
-    | 'uploading'
-    | 'pending'
-    | 'running'
-    | 'done'
-    | 'failed';
+  state: MineruResumeParseStatus;
   markdown_url?: string;
   err_code?: number;
   err_msg?: string;
@@ -71,7 +66,7 @@ export class MineruService {
 
     return {
       taskId: task.task_id,
-      state: 'pending',
+      state: RESUME_PARSE_STATUS.PENDING,
     };
   }
 
@@ -82,7 +77,7 @@ export class MineruService {
       `/parse/${encodeURIComponent(taskId)}`,
     );
 
-    if (task.state !== 'done' || !task.markdown_url) {
+    if (task.state !== RESUME_PARSE_STATUS.DONE || !task.markdown_url) {
       return task;
     }
 

@@ -13,6 +13,13 @@ import { CreateAudioRecordDto } from './dto/create-audio-record.dto';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { CreateManualRecordDto } from './dto/create-manual-record.dto';
 import { TranscribeAudioRecordDto } from './dto/transcribe-audio-record.dto';
+import {
+  INTERVIEW_RECORD_BUILD_STATUS,
+  INTERVIEW_RECORD_STATUS,
+  getBuildStatusForTranscript,
+  isInterviewRecordReady,
+  normalizeInterviewRecordBuildStatus,
+} from './interview-record-status';
 import { assertAudioUpload, getAudioExtension } from './utils/audio-upload.util';
 
 const knowledgeBaseInclude = {
@@ -154,8 +161,8 @@ export class InterviewKnowledgeBasesService {
         sourceType: 'manual',
         interviewDate: new Date(data.interviewDate),
         transcript: data.transcript ?? '',
-        status: 'ready',
-        buildStatus: data.transcript?.trim() ? 'not_built' : 'empty',
+        status: INTERVIEW_RECORD_STATUS.READY,
+        buildStatus: getBuildStatusForTranscript(data.transcript),
       },
     });
 
@@ -188,8 +195,8 @@ export class InterviewKnowledgeBasesService {
         audioFileName: file?.originalname ?? this.getFileNameFromUrl(inputAudioUrl),
         audioFileSize: file?.size,
         audioUrl,
-        status: 'asr_pending',
-        buildStatus: 'waiting_asr',
+        status: INTERVIEW_RECORD_STATUS.ASR_PENDING,
+        buildStatus: INTERVIEW_RECORD_BUILD_STATUS.WAITING_ASR,
       },
     });
 
@@ -252,8 +259,8 @@ export class InterviewKnowledgeBasesService {
       where: { id: record.id },
       data: {
         audioUrl,
-        status: 'transcribing',
-        buildStatus: 'waiting_asr',
+        status: INTERVIEW_RECORD_STATUS.TRANSCRIBING,
+        buildStatus: INTERVIEW_RECORD_BUILD_STATUS.WAITING_ASR,
         buildError: null,
       },
     });
@@ -265,8 +272,8 @@ export class InterviewKnowledgeBasesService {
         where: { id: record.id },
         data: {
           audioUrl,
-          status: 'ready',
-          buildStatus: transcript.trim() ? 'not_built' : 'empty',
+          status: INTERVIEW_RECORD_STATUS.READY,
+          buildStatus: getBuildStatusForTranscript(transcript),
           buildError: null,
           transcript,
           asrProvider: result.provider,
@@ -284,8 +291,8 @@ export class InterviewKnowledgeBasesService {
       await this.prisma.realInterviewRecord.update({
         where: { id: record.id },
         data: {
-          status: 'failed',
-          buildStatus: 'waiting_asr',
+          status: INTERVIEW_RECORD_STATUS.FAILED,
+          buildStatus: INTERVIEW_RECORD_BUILD_STATUS.WAITING_ASR,
           buildError: message,
         },
       });
@@ -320,7 +327,7 @@ export class InterviewKnowledgeBasesService {
     await this.prisma.realInterviewRecord.update({
       where: { id: record.id },
       data: {
-        buildStatus: 'building',
+        buildStatus: INTERVIEW_RECORD_BUILD_STATUS.BUILDING,
         buildError: null,
       },
     });
@@ -337,8 +344,8 @@ export class InterviewKnowledgeBasesService {
       const updated = await this.prisma.realInterviewRecord.update({
         where: { id: record.id },
         data: {
-          status: 'ready',
-          buildStatus: 'built',
+          status: INTERVIEW_RECORD_STATUS.READY,
+          buildStatus: INTERVIEW_RECORD_BUILD_STATUS.BUILT,
           buildError: null,
           structuredContent: buildResult as unknown as Prisma.InputJsonValue,
           chunks: buildResult.chunks as unknown as Prisma.InputJsonValue,
@@ -352,7 +359,7 @@ export class InterviewKnowledgeBasesService {
       await this.prisma.realInterviewRecord.update({
         where: { id: record.id },
         data: {
-          buildStatus: 'failed',
+          buildStatus: INTERVIEW_RECORD_BUILD_STATUS.FAILED,
           buildError: message,
         },
       });
@@ -530,7 +537,7 @@ export class InterviewKnowledgeBasesService {
     return {
       monthlyQuestionCount,
       recommendation:
-        recordStatus !== 'ready'
+        !isInterviewRecordReady(recordStatus)
           ? '这条记录还在处理，完成转写后才能稳定影响出题。'
           : monthlyQuestionCount > 0
             ? '这条记录所在知识库已被用于出题，建议继续补充面试官追问和你的真实回答。'
@@ -598,7 +605,7 @@ export class InterviewKnowledgeBasesService {
       roleTranscript: record.roleTranscript ?? undefined,
       transcribedAt: record.transcribedAt?.toISOString(),
       status: record.status,
-      buildStatus: record.buildStatus ?? 'not_built',
+      buildStatus: normalizeInterviewRecordBuildStatus(record.buildStatus),
       buildError: record.buildError ?? undefined,
       structuredContent: record.structuredContent ?? undefined,
       chunks: record.chunks ?? [],

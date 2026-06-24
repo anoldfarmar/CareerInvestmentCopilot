@@ -17,6 +17,12 @@ describe('OverviewService', () => {
     userProfile: {
       findUnique: jest.fn(),
     },
+    job: {
+      groupBy: jest.fn(),
+    },
+    dailyActivity: {
+      findMany: jest.fn(),
+    },
   };
 
   const service = new OverviewService(prisma as unknown as PrismaService);
@@ -31,6 +37,16 @@ describe('OverviewService', () => {
     prisma.reviewReport.count.mockResolvedValue(1);
     prisma.reviewReport.findFirst.mockResolvedValue({ title: '专业面试复盘报告' });
     prisma.userProfile.findUnique.mockResolvedValue({ jobMode: 'experienced' });
+
+    prisma.job.groupBy.mockResolvedValue([
+      { status: 'draft', _count: { status: 1 } },
+      { status: 'applied', _count: { status: 2 } },
+      { status: 'interviewing', _count: { status: 1 } },
+      { status: 'offer', _count: { status: 1 } },
+      { status: 'rejected', _count: { status: 1 } },
+      { status: 'unknown', _count: { status: 99 } },
+    ]);
+    prisma.dailyActivity.findMany.mockResolvedValue([]);
 
     const result = await service.getOverview(10);
 
@@ -47,5 +63,10 @@ describe('OverviewService', () => {
     ]);
     expect(result.recentReportTitle).toBe('专业面试复盘报告');
     expect(result.mode).toBe('社招求职模式');
+    expect(result.pipeline).toEqual({
+      applications: 5,
+      interviews: 2,
+      offers: 1,
+    });
   });
 });

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ActivityDay, Todo, Resume, Job, InterviewReport, InterviewSession, InterviewTranscriptItem } from "./types";
 import { BackendReport, backendApi, mapBackendJob, mapBackendReport, mapBackendResume } from "./api/backend";
 import { clearAuthToken, getAuthToken } from "./api/client";
+import { isResumeParseFailed, isResumeParseSuccessful } from "./domain/status-contracts";
 
 // Import Custom Subviews
 import WorkbenchView from "./components/WorkbenchView";
@@ -156,8 +157,8 @@ export default function App() {
       let parsedResume = null as Awaited<ReturnType<typeof backendApi.syncResumeParse>> | null;
 
       for (let attempt = 0; attempt < 20; attempt += 1) {
-        if (parseStatus === "done") break;
-        if (parseStatus === "failed" || parseStatus === "unsupported") return;
+        if (isResumeParseSuccessful(parseStatus)) break;
+        if (isResumeParseFailed(parseStatus)) return;
 
         await sleep(attempt === 0 ? 1200 : 3000);
         parsedResume = await backendApi.syncResumeParse(resumeId);
@@ -169,7 +170,7 @@ export default function App() {
         );
       }
 
-      if (parseStatus !== "done") return;
+      if (!isResumeParseSuccessful(parseStatus)) return;
 
       const structured = await backendApi.structureResume(resumeId);
       setResumes((prev) =>

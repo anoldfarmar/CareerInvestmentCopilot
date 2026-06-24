@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { BackendKnowledgeRecord, backendApi } from "../api/backend";
+import { isInterviewRecordBuildComplete } from "../domain/status-contracts";
 import { Resume } from "../types";
 
 interface AudioReviewViewProps {
@@ -30,7 +31,7 @@ export default function AudioReviewView({
   const [reviewRecord, setReviewRecord] = useState<BackendKnowledgeRecord | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
-  const isReviewStored = reviewRecord?.buildStatus === "built";
+  const isReviewStored = isInterviewRecordBuildComplete(reviewRecord?.buildStatus);
 
   useEffect(() => {
     if (!selectedResumeId && resumes[0]) {
@@ -82,7 +83,7 @@ export default function AudioReviewView({
 
       setReviewRecord(record);
       setProcessMessage(
-        record.buildStatus === "built"
+        isInterviewRecordBuildComplete(record.buildStatus)
           ? "复盘解析完成，录音、转写文本和结构化知识已写入数据库。"
           : `录音已上传，当前状态：${record.status} / ${record.buildStatus}`,
       );

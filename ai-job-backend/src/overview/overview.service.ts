@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { createJobStatusCounts, isApplicationJobStatus, isJobStatus } from '../jobs/job-status';
 
 @Injectable()
 export class OverviewService {
@@ -56,8 +57,10 @@ export class OverviewService {
       ]);
 
     const statusCounts = this.toStatusCounts(jobStatusCounts);
-    const applicationCount =
-      statusCounts.applied + statusCounts.interviewing + statusCounts.offer + statusCounts.rejected;
+    const applicationCount = Object.entries(statusCounts).reduce(
+      (total, [status, count]) => total + (isApplicationJobStatus(status) ? count : 0),
+      0,
+    );
     const funnelInterviewCount = statusCounts.interviewing + statusCounts.offer;
     const activityCalendar = this.buildActivityCalendar(activityRows);
     const todayActivity =
@@ -111,19 +114,11 @@ export class OverviewService {
   }
 
   private toStatusCounts(rows: Array<{ status: string; _count: { status: number } }>) {
-    const counts = {
-      draft: 0,
-      interested: 0,
-      applied: 0,
-      interviewing: 0,
-      offer: 0,
-      rejected: 0,
-      archived: 0,
-    };
+    const counts = createJobStatusCounts();
 
     for (const row of rows) {
-      if (row.status in counts) {
-        counts[row.status as keyof typeof counts] = row._count.status;
+      if (isJobStatus(row.status)) {
+        counts[row.status] = row._count.status;
       }
     }
 

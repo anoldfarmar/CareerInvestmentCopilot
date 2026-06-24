@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { BackendKnowledgeBase, BackendKnowledgeRecord, backendApi } from "../api/backend";
+import { isInterviewRecordBuildComplete } from "../domain/status-contracts";
 import { InterviewReport } from "../types";
 import { AudioReviewResult } from "./AudioReviewView";
 
@@ -27,7 +28,7 @@ export default function KnowledgeBaseView(_: KnowledgeBaseViewProps) {
 
   const records = activeBase?.records ?? [];
   const builtCount = useMemo(
-    () => records.filter((record) => record.buildStatus === "built").length,
+    () => records.filter((record) => isInterviewRecordBuildComplete(record.buildStatus)).length,
     [records],
   );
   const chunkCount = useMemo(
@@ -341,7 +342,7 @@ function RecordCard({
   isExpanded: boolean;
   onToggleExpand: () => void;
 }) {
-  const isBuilt = record.buildStatus === "built";
+  const isBuilt = isInterviewRecordBuildComplete(record.buildStatus);
 
   return (
     <div className="bg-white border border-border-subtle rounded-xl p-4">

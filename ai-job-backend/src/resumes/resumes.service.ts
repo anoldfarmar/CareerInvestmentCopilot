@@ -20,6 +20,11 @@ import { UpdateResumeDto } from './dto/update-resume.dto';
 import { DeepseekService } from './deepseek.service';
 import { MineruService } from './mineru.service';
 import {
+  RESUME_PARSE_STATUS,
+  isResumeParseFailed,
+  isResumeParseSuccessful,
+} from './resume-status';
+import {
   ResumePdfContent,
   ResumePdfService,
   ResumePdfTemplate,
@@ -147,10 +152,10 @@ export class ResumesService {
         originalFileSize: file.size,
         parseStatus:
           uploadKind === 'markdown'
-            ? 'done'
+            ? RESUME_PARSE_STATUS.DONE
             : uploadKind === 'parseable'
-              ? 'pending'
-              : 'unsupported',
+              ? RESUME_PARSE_STATUS.PENDING
+              : RESUME_PARSE_STATUS.UNSUPPORTED,
       },
     });
 
@@ -175,7 +180,7 @@ export class ResumesService {
     } catch (error) {
       return this.prisma.resume.update({
         where: { id: resume.id },
-        data: { parseStatus: 'failed' },
+        data: { parseStatus: RESUME_PARSE_STATUS.FAILED },
       });
     }
   }
@@ -370,21 +375,21 @@ export class ResumesService {
           }),
         );
 
-        if (task.state === 'done') {
+        if (isResumeParseSuccessful(task.state)) {
           await this.prisma.resume.update({
             where: { id: resumeId },
             data: {
-              parseStatus: 'done',
+              parseStatus: RESUME_PARSE_STATUS.DONE,
               originalContent: task.markdownContent ?? undefined,
             },
           });
           return;
         }
 
-        if (task.state === 'failed') {
+        if (isResumeParseFailed(task.state)) {
           await this.prisma.resume.update({
             where: { id: resumeId },
-            data: { parseStatus: 'failed' },
+            data: { parseStatus: RESUME_PARSE_STATUS.FAILED },
           });
           return;
         }

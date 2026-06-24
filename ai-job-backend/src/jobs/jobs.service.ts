@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityService } from '../activity/activity.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
+import { createJobStatusCounts, isApplicationJobStatus, isJobStatus } from './job-status';
 
 @Injectable()
 export class JobsService {
@@ -21,7 +22,7 @@ export class JobsService {
       },
     });
 
-    if (this.isApplicationStatus(job.status)) {
+    if (isApplicationJobStatus(job.status)) {
       await this.activityService.incrementApplication(userId, job.createdAt);
     }
 
@@ -55,9 +56,7 @@ export class JobsService {
       orderBy: { updatedAt: 'desc' },
     });
     const monthlyJobs = jobs.filter((job) => job.updatedAt >= monthStart);
-    const effectiveJobs = monthlyJobs.filter((job) =>
-      ['applied', 'interviewing', 'offer', 'rejected'].includes(job.status),
-    );
+    const effectiveJobs = monthlyJobs.filter((job) => isApplicationJobStatus(job.status));
     const statusCounts = this.countByStatus(monthlyJobs);
     const total = effectiveJobs.length;
     const interviewCount = statusCounts.interviewing + statusCounts.offer;
@@ -98,8 +97,8 @@ export class JobsService {
 
     if (
       typeof data.status === 'string' &&
-      !this.isApplicationStatus(previous.status) &&
-      this.isApplicationStatus(updated.status)
+      !isApplicationJobStatus(previous.status) &&
+      isApplicationJobStatus(updated.status)
     ) {
       await this.activityService.incrementApplication(userId, updated.updatedAt);
     }
@@ -116,14 +115,13 @@ export class JobsService {
   }
 
   private countByStatus(jobs: Array<{ status: string }>) {
-    const statuses = ['draft', 'interested', 'applied', 'interviewing', 'offer', 'rejected', 'archived'];
-    return Object.fromEntries(
-      statuses.map((status) => [status, jobs.filter((job) => job.status === status).length]),
-    ) as Record<string, number>;
-  }
-
-  private isApplicationStatus(status: string) {
-    return ['applied', 'interviewing', 'offer', 'rejected'].includes(status);
+    const counts = createJobStatusCounts();
+    for (const job of jobs) {
+      if (isJobStatus(job.status)) {
+        counts[job.status] += 1;
+      }
+    }
+    return counts;
   }
 
   private toRate(count: number, total: number) {

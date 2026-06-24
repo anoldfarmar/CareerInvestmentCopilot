@@ -1,4 +1,10 @@
 import { ActivityDay, InterviewReport, InterviewSession, Job, Resume } from "../types";
+import {
+  RESUME_PARSE_STATUS,
+  isJobStatus,
+  isResumeParseInProgress,
+  isResumeParseSuccessful,
+} from "../domain/status-contracts";
 import { API_BASE_URL, ApiError, apiRequest, getAuthToken, setAuthToken } from "./client";
 
 interface Paginated<T> {
@@ -208,16 +214,6 @@ const resetProfileInput: Partial<BackendProfile> = {
   enableVoiceInput: true,
   showStarTips: true,
 };
-
-const allowedJobStatuses = new Set([
-  "draft",
-  "interested",
-  "applied",
-  "interviewing",
-  "offer",
-  "rejected",
-  "archived",
-]);
 
 export const backendApi = {
   me: () => apiRequest("/auth/me"),
@@ -431,7 +427,7 @@ function toCreateJobBody(input: {
     ...(input.company?.trim() ? { company: input.company.trim() } : {}),
     description: input.description.trim(),
     ...(sourceUrl && isHttpUrl(sourceUrl) ? { sourceUrl } : {}),
-    ...(input.status && allowedJobStatuses.has(input.status) ? { status: input.status } : {}),
+    ...(isJobStatus(input.status) ? { status: input.status } : {}),
   };
 }
 
@@ -495,7 +491,7 @@ async function uploadResumeForParsing(file: File) {
     if (error instanceof ApiError && error.status === 400) {
       return {
         ...created,
-        parseStatus: "unsupported",
+        parseStatus: RESUME_PARSE_STATUS.UNSUPPORTED,
       };
     }
     throw error;
@@ -648,13 +644,13 @@ export function mapBackendResume(resume: BackendResume): Resume {
           ? "优化中"
           : resume.structureStatus === "running"
             ? "结构化中"
-            : resume.parseStatus === "done"
+            : isResumeParseSuccessful(resume.parseStatus)
               ? "待结构化"
-              : ["pending", "running", "uploading", "waiting-file"].includes(resume.parseStatus ?? "")
+              : isResumeParseInProgress(resume.parseStatus)
                 ? "解析中"
-                : resume.parseStatus === "failed"
+                : resume.parseStatus === RESUME_PARSE_STATUS.FAILED
                   ? "解析失败"
-                  : resume.parseStatus === "unsupported"
+                  : resume.parseStatus === RESUME_PARSE_STATUS.UNSUPPORTED
                     ? "仅保存"
                     : "待解析";
 
