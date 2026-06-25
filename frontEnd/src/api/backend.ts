@@ -1,11 +1,13 @@
-import { ActivityDay, InterviewReport, InterviewSession, Job, Resume } from "../types";
+import { ActivityDay, InterviewReport, InterviewSession, Resume } from "../types";
 import {
   RESUME_PARSE_STATUS,
-  isJobStatus,
   isResumeParseInProgress,
   isResumeParseSuccessful,
 } from "../domain/status-contracts";
 import { API_BASE_URL, ApiError, apiRequest, getAuthToken, setAuthToken } from "./client";
+import { jobApi } from "./jobs";
+export type { BackendJobRecommendation, BackendJobRecommendationResult } from "./jobs";
+export { mapBackendJob } from "./jobs";
 
 interface Paginated<T> {
   items: T[];
@@ -16,42 +18,6 @@ interface Paginated<T> {
 
 interface BackendLoginResult {
   accessToken: string;
-}
-
-interface BackendJob {
-  id: number;
-  title: string;
-  company: string;
-  description?: string | null;
-  sourceUrl?: string | null;
-  status?: string | null;
-  tags?: string[] | null;
-  updatedAt?: string;
-}
-
-export interface BackendJobRecommendation {
-  index: number;
-  title: string;
-  url: string;
-  summary: string;
-  source: string;
-  tier: string;
-  tierReason: string;
-  groupName?: string;
-  sourceKey?: string;
-}
-
-export interface BackendJobRecommendationResult {
-  generatedAt: string;
-  intent: {
-    targetRoles: string[];
-    cities: string[];
-    skills: string[];
-    availability: string;
-    profile: string;
-  };
-  total: number;
-  recommendations: BackendJobRecommendation[];
 }
 
 interface BackendResume {
@@ -218,35 +184,10 @@ const resetProfileInput: Partial<BackendProfile> = {
 export const backendApi = {
   me: () => apiRequest("/auth/me"),
   overview: () => apiRequest<BackendOverview>("/overview"),
-  jobs: () => apiRequest<Paginated<BackendJob>>("/jobs?page=1&pageSize=50"),
-  createJob: (input: {
-    title: string;
-    company?: string;
-    description: string;
-    sourceUrl?: string;
-    status?: string;
-  }) =>
-    apiRequest<BackendJob>("/jobs", {
-      method: "POST",
-      body: toCreateJobBody(input),
-    }),
-  deleteJob: (jobId: string) =>
-    apiRequest<BackendJob>(`/jobs/${jobId}`, {
-      method: "DELETE",
-    }),
-  recommendJobs: (input: {
-    targetRoles?: string[];
-    cities?: string[];
-    skills?: string[];
-    availability?: string;
-    mode?: "fast" | "standard" | "broad";
-    maxResults?: number;
-    profile?: string;
-  }) =>
-    apiRequest<BackendJobRecommendationResult>("/jobs/recommendations", {
-      method: "POST",
-      body: input,
-    }),
+  jobs: jobApi.jobs,
+  createJob: jobApi.createJob,
+  deleteJob: jobApi.deleteJob,
+  recommendJobs: jobApi.recommendJobs,
   resumes: () => apiRequest<Paginated<BackendResume>>("/resumes?page=1&pageSize=50"),
   reports: () => apiRequest<Paginated<BackendReport>>("/reports?page=1&pageSize=50"),
   report: (reportId: string) => apiRequest<BackendReport>(`/reports/${reportId}`),
@@ -414,23 +355,6 @@ export const backendApi = {
     }),
 };
 
-function toCreateJobBody(input: {
-  title: string;
-  company?: string;
-  description: string;
-  sourceUrl?: string;
-  status?: string;
-}) {
-  const sourceUrl = input.sourceUrl?.trim();
-  return {
-    title: input.title.trim(),
-    ...(input.company?.trim() ? { company: input.company.trim() } : {}),
-    description: input.description.trim(),
-    ...(sourceUrl && isHttpUrl(sourceUrl) ? { sourceUrl } : {}),
-    ...(isJobStatus(input.status) ? { status: input.status } : {}),
-  };
-}
-
 function toProfileBody(input: Partial<BackendProfile>) {
   return {
     ...(typeof input.name === "string" ? { name: input.name } : {}),
@@ -548,15 +472,6 @@ async function ensureAudioReviewKnowledgeBase() {
   });
 }
 
-function isHttpUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function uploadFormWithProgress<T>(
   path: string,
   formData: FormData,
@@ -620,19 +535,6 @@ async function apiBlobRequest(path: string, options: RequestInit = {}) {
   return response.blob();
 }
 
-export function mapBackendJob(job: BackendJob): Job {
-  return {
-    id: String(job.id),
-    title: job.title,
-    company: job.company,
-    logoUrl: "",
-    logoAlt: job.company,
-    description: job.description ?? "暂无岗位描述",
-    matchScore: statusToScore(job.status),
-    tag: job.tags?.[0] ?? statusToLabel(job.status),
-  };
-}
-
 export function mapBackendResume(resume: BackendResume): Resume {
   const tag = resume.finalizedAt
     ? "已定稿"
@@ -693,31 +595,6 @@ export function mapBackendReport(report: BackendReport): InterviewReport {
     nextActions,
     topDirections: toTopDirections(report.topDirections),
   };
-}
-
-function statusToScore(status?: string | null) {
-  const scores: Record<string, number> = {
-    offer: 96,
-    interviewing: 86,
-    applied: 72,
-    interested: 64,
-    draft: 52,
-    rejected: 35,
-  };
-  return scores[status ?? ""] ?? 70;
-}
-
-function statusToLabel(status?: string | null) {
-  const labels: Record<string, string> = {
-    offer: "Offer",
-    interviewing: "面试中",
-    applied: "已投递",
-    interested: "感兴趣",
-    draft: "草稿",
-    rejected: "未通过",
-    archived: "已归档",
-  };
-  return labels[status ?? ""] ?? "Job";
 }
 
 function formatDate(value?: string) {
