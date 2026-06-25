@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
 import { BackendInterviewProgress, BackendReport, backendApi } from "../api/backend";
+import { canRecordAudio, startRealtimeTranscription, type RealtimeSpeechEvent, type RealtimeSpeechSession } from "../services/speech";
 import { ChatMessage, InterviewSession, InterviewTranscriptItem } from "../types";
+
+type TranscriptSegment = {
+  id: number;
+  text: string;
+  finalized: boolean;
+  recognitionRound?: number;
+};
 
 interface MockInterviewViewProps {
   company: string;
@@ -25,6 +33,7 @@ export default function MockInterviewView({
   const [isTyping, setIsTyping] = useState(false);
   const [currentSession, setCurrentSession] = useState<InterviewSession | null>(session);
   const [errorMessage, setErrorMessage] = useState("");
+  const [isListening, setIsListening] = useState(false);
   const [progress, setProgress] = useState<BackendInterviewProgress | null>(null);
   const [showQuestionPanel, setShowQuestionPanel] = useState(false);
   const [showFeedbackPanel, setShowFeedbackPanel] = useState(false);
@@ -36,6 +45,10 @@ export default function MockInterviewView({
   });
   const [customQuestion, setCustomQuestion] = useState("");
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const realtimeSpeechSessionRef = useRef<RealtimeSpeechSession | null>(null);
+  const voiceBaseTextRef = useRef("");
+  const voiceSegmentsRef = useRef<TranscriptSegment[]>([]);
+  const voiceNextSegmentIdRef = useRef(1);
 
   // Question bank based on company profiles
   const fallbackQuestions = [
@@ -86,6 +99,12 @@ export default function MockInterviewView({
   }, [currentSession?.sessionId, currentSession?.messages.length, currentSession?.currentQuestion]);
 
   useEffect(() => {
+    return () => {
+      realtimeSpeechSessionRef.current?.stop();
+    };
+  }, []);
+
+  useEffect(() => {
     // Scroll block automatically to bottom whenever messages list grows
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
@@ -120,33 +139,134 @@ export default function MockInterviewView({
     : 0;
 
   const handleSend = async () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() || isTyping) return;
 
     const userText = inputValue;
+    const times = new Date().toLocaleTimeString("zh-CN", { minute: "2-digit", second: "2-digit" });
+    const optimisticMessage: ChatMessage = {
+      id: `msg-user-${Date.now()}`,
+      sender: "user",
+      text: userText,
+      timestamp: times,
+    };
     setInputValue("");
     setErrorMessage("");
+    setMessages((prev) => [...prev, optimisticMessage]);
 
     if (!currentSession?.sessionId) {
-      const times = new Date().toLocaleTimeString("zh-CN", { minute: "2-digit", second: "2-digit" });
-      setMessages((prev) => [
-        ...prev,
-        { id: `msg-user-${Date.now()}`, sender: "user", text: userText, timestamp: times },
-      ]);
       return;
     }
 
     setIsTyping(true);
     try {
       const answered = await backendApi.submitInterviewAnswer(currentSession.sessionId, userText);
-      const nextSession = answered.ended
-        ? answered
-        : await backendApi.nextInterviewQuestion(currentSession.sessionId);
-      syncSessionToChat(nextSession);
+      syncSessionToChat(answered);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "回答提交失败，请稍后重试。");
+      setErrorMessage(error instanceof Error ? error.message : "\u56de\u7b54\u63d0\u4ea4\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002");
     } finally {
       setIsTyping(false);
     }
+  };
+  const handleToggleVoiceInput = async () => {
+    if (isTyping) return;
+
+    if (isListening) {
+      realtimeSpeechSessionRef.current?.stop();
+      realtimeSpeechSessionRef.current = null;
+      setIsListening(false);
+      return;
+    }
+
+    if (!canRecordAudio()) {
+      setErrorMessage("\u5f53\u524d\u73af\u5883\u4e0d\u652f\u6301\u5b9e\u65f6\u5f55\u97f3\uff0c\u8bf7\u68c0\u67e5\u6d4f\u89c8\u5668\u9ea6\u514b\u98ce\u6743\u9650\u3002");
+      return;
+    }
+
+    try {
+      setErrorMessage("");
+      setIsListening(true);
+      voiceBaseTextRef.current = inputValue.trim() ? `${inputValue.trim()} ` : "";
+      voiceSegmentsRef.current = [];
+      voiceNextSegmentIdRef.current = 1;
+
+      realtimeSpeechSessionRef.current = await startRealtimeTranscription({
+        language: "zh-CN",
+        onMessage: handleRealtimeSpeechMessage,
+        onError: (message) => {
+          setErrorMessage(message);
+          setIsListening(false);
+        },
+        onClose: () => {
+          realtimeSpeechSessionRef.current = null;
+          setIsListening(false);
+        },
+      });
+    } catch {
+      realtimeSpeechSessionRef.current = null;
+      setIsListening(false);
+      setErrorMessage("\u65e0\u6cd5\u6253\u5f00\u9ea6\u514b\u98ce\uff0c\u8bf7\u68c0\u67e5\u6d4f\u89c8\u5668\u6743\u9650\u3002");
+    }
+  };
+
+  const handleRealtimeSpeechMessage = (event: RealtimeSpeechEvent) => {
+    if (event.type === "ready") {
+      setErrorMessage("");
+      return;
+    }
+
+    if (event.type === "error") {
+      setErrorMessage(event.message ?? "\u5b9e\u65f6\u8bed\u97f3\u670d\u52a1\u6682\u4e0d\u53ef\u7528\u3002");
+      return;
+    }
+
+    if (event.type === "partial" || event.type === "final") {
+      upsertVoiceSegment(event);
+      setInputValue(buildVoiceTranscript());
+    }
+  };
+
+  const upsertVoiceSegment = (event: RealtimeSpeechEvent) => {
+    const text = (event.text ?? "").trim();
+    if (!text) return;
+
+    const id = event.resultId ?? voiceNextSegmentIdRef.current;
+    const nextSegment: TranscriptSegment = {
+      id,
+      text,
+      finalized: event.type === "final" || event.isLast === true || event.isFinish === true,
+      recognitionRound: event.recognitionRound,
+    };
+    const existingIndex = voiceSegmentsRef.current.findIndex((segment) => segment.id === id);
+
+    if (existingIndex >= 0) {
+      voiceSegmentsRef.current[existingIndex] = nextSegment;
+      return;
+    }
+
+    const lastSegment = voiceSegmentsRef.current[voiceSegmentsRef.current.length - 1];
+    const canReformLastSegment =
+      event.reformation === 1 &&
+      lastSegment &&
+      !lastSegment.finalized &&
+      (event.recognitionRound === undefined || lastSegment.recognitionRound === event.recognitionRound);
+
+    if (canReformLastSegment) {
+      voiceSegmentsRef.current[voiceSegmentsRef.current.length - 1] = nextSegment;
+    } else {
+      voiceSegmentsRef.current.push(nextSegment);
+    }
+
+    voiceNextSegmentIdRef.current = Math.max(voiceNextSegmentIdRef.current, id + 1);
+  };
+
+  const buildVoiceTranscript = () => {
+    const merged = voiceSegmentsRef.current
+      .slice()
+      .sort((left, right) => left.id - right.id)
+      .map((segment) => segment.text)
+      .join("");
+
+    return `${voiceBaseTextRef.current}${merged}`.trimStart();
   };
 
   const handleInsertPresetReply = () => {
@@ -256,6 +376,7 @@ export default function MockInterviewView({
       setIsTyping(false);
     }
   };
+
 
   const mapSessionMessages = (value: InterviewSession): ChatMessage[] =>
     value.messages.map((message) => ({
@@ -507,11 +628,15 @@ export default function MockInterviewView({
       <footer className="absolute bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-border-subtle px-5 dark:border-zinc-200/50 pt-3 pb-8 z-50">
         <div className="flex items-center gap-2 bg-zinc-50 border border-border-subtle rounded-xl p-1 shadow-inner focus-within:ring-2 focus-within:ring-primary-container/40 transition-all">
           <button
-            onClick={handleInsertPresetReply}
-            className="w-9 h-9 flex items-center justify-center text-outline hover:text-primary hover:bg-zinc-100 rounded-lg transition-all cursor-pointer"
-            title="快捷生成参考回答示例"
+            type="button"
+            onClick={handleToggleVoiceInput}
+            disabled={isTyping}
+            className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all cursor-pointer disabled:opacity-50 ${
+              isListening ? "bg-primary text-white" : "text-outline hover:text-primary hover:bg-zinc-100"
+            }`}
+            title={isListening ? "\u505c\u6b62\u8bed\u97f3\u8f93\u5165" : "\u8bed\u97f3\u8f6c\u6587\u5b57"}
           >
-            <span className="material-symbols-outlined text-xl">mic</span>
+            <span className="material-symbols-outlined text-xl">{isListening ? "stop_circle" : "mic"}</span>
           </button>
           <input
             id="chat-user-textbox"

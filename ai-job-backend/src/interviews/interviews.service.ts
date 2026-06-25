@@ -398,16 +398,19 @@ export class InterviewsService {
     const questions = this.readQuestions(session.questions);
     const currentQuestion = this.findQuestionByOrder(questions, session.currentQuestion);
     const messages = this.readMessages(session.messages);
+    const isAnsweringFollowUp = this.isAnsweringFollowUp(messages, currentQuestion?.id);
     messages.push(this.createMessage('user', data.answer, session.id, currentQuestion?.id));
 
-    const followUpMessage = await this.createFollowUpQuestionMessage(
-      session.id,
-      currentQuestion,
-      data.answer,
-      session.jobDescription ?? undefined,
-      messages,
-      this.readStrategySnapshot(session.strategySnapshot),
-    );
+    const followUpMessage = isAnsweringFollowUp
+      ? undefined
+      : await this.createFollowUpQuestionMessage(
+          session.id,
+          currentQuestion,
+          data.answer,
+          session.jobDescription ?? undefined,
+          messages,
+          this.readStrategySnapshot(session.strategySnapshot),
+        );
     if (followUpMessage) {
       messages.push(followUpMessage);
     }
@@ -420,6 +423,15 @@ export class InterviewsService {
     });
 
     return this.toSessionResponse(updated);
+  }
+
+  private isAnsweringFollowUp(messages: InterviewMessage[], questionId?: string) {
+    if (!questionId) {
+      return false;
+    }
+    const questionMessages = messages.filter((message) => message.questionId === questionId);
+    const latestQuestionMessage = questionMessages[questionMessages.length - 1];
+    return latestQuestionMessage?.role === 'assistant' && latestQuestionMessage.messageType === 'follow_up';
   }
 
   async moveToNextQuestion(userId: number, sessionId: string) {

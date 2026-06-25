@@ -132,6 +132,71 @@ describe('InterviewsService', () => {
     expect(result.ended).toBe(false);
   });
 
+  it('does not create another follow-up when answering a follow-up', async () => {
+    prisma.interviewSession.findFirst.mockResolvedValue({
+      id: 'session-1',
+      type: 'general',
+      totalQuestions: 2,
+      currentQuestion: 1,
+      ended: false,
+      startedAt,
+      jobDescription: '',
+      knowledgeBaseIds: [],
+      questions,
+      questionFeedback: {},
+      messages: [
+        {
+          id: 'assistant-1',
+          sessionId: 'session-1',
+          role: 'assistant',
+          content: questions[0].content,
+          questionId: 'q-1',
+          createdAt: startedAt.toISOString(),
+        },
+        {
+          id: 'user-1',
+          sessionId: 'session-1',
+          role: 'user',
+          content: 'I improved frontend performance.',
+          questionId: 'q-1',
+          createdAt: startedAt.toISOString(),
+        },
+        {
+          id: 'assistant-follow-up-1',
+          sessionId: 'session-1',
+          role: 'assistant',
+          content: 'Please explain the metrics.',
+          questionId: 'q-1',
+          messageType: 'follow_up',
+          createdAt: startedAt.toISOString(),
+        },
+      ],
+    });
+    prisma.interviewSession.update.mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: 'session-1',
+        type: 'general',
+        totalQuestions: 2,
+        currentQuestion: 1,
+        ended: false,
+        startedAt,
+        knowledgeBaseIds: [],
+        questions,
+        questionFeedback: {},
+        ...data,
+      }),
+    );
+
+    const result = await service.submitAnswer(10, 'session-1', {
+      answer: 'I would use FCP and conversion rate to prove impact.',
+    });
+
+    expect(result.currentQuestion).toBe(1);
+    expect(result.messages).toHaveLength(4);
+    expect(result.messages[3]).toEqual(expect.objectContaining({ role: 'user', questionId: 'q-1' }));
+    expect(result.messages.filter((message) => message.messageType === 'follow_up')).toHaveLength(1);
+  });
+
   it('用户手动进入下一题时才推进 currentQuestion', async () => {
     prisma.interviewSession.findFirst.mockResolvedValue({
       id: 'session-1',
