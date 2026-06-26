@@ -10,6 +10,22 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { requestIdMiddleware } from './common/middleware/request-id.middleware';
 import { SpeechRealtimeGateway } from './speech/speech-realtime.gateway';
 
+function buildCorsOrigin() {
+  const allowedOrigins = (process.env.CORS_ORIGIN ?? 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(null, false);
+  };
+}
+
 async function bootstrap() {
   validateEnv();
 
@@ -27,7 +43,7 @@ async function bootstrap() {
   app.useGlobalFilters(new GlobalExceptionFilter());
 
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+    origin: buildCorsOrigin(),
     credentials: true,
   });
 
