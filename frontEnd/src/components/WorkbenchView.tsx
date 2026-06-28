@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { ActivityDay, Todo } from "../types";
 
 interface WorkbenchViewProps {
@@ -26,25 +26,47 @@ export default function WorkbenchView({
   onNavigate,
   onSelectActionJob,
 }: WorkbenchViewProps) {
-  const [activeTooltip, setActiveTooltip] = useState<number | null>(null);
+  const today = useMemo(() => new Date(), []);
+  const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
+  const [visibleMonth, setVisibleMonth] = useState(
+    () => new Date(today.getFullYear(), today.getMonth(), 1),
+  );
 
-  const heatmapData =
-    activityDays.length > 0
-      ? activityDays
-      : Array.from({ length: 28 }, (_, index) => {
-          const day = index + 1;
-          const isToday = day === 24;
+  const monthMeta = useMemo(() => {
+    const year = visibleMonth.getFullYear();
+    const month = visibleMonth.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstWeekday = new Date(year, month, 1).getDay();
+    const activityMap = new Map(activityDays.map((item) => [item.date, item]));
 
-          return {
-            date: `2026-06-${String(day).padStart(2, "0")}`,
-            day,
-            applicationCount: 0,
-            audioUploadCount: 0,
-            mockInterviewCount: 0,
-            totalCount: isToday ? todayActivityCount : 0,
-            level: isToday ? todayActivityLevel : 0,
-          };
-        });
+    const days = Array.from({ length: daysInMonth }, (_, index) => {
+      const day = index + 1;
+      const date = new Date(year, month, day);
+      const dateKey = formatDateKey(date);
+      const backendDay = activityMap.get(dateKey);
+      const isToday = isSameDay(date, today);
+
+      return {
+        date: dateKey,
+        day,
+        applicationCount: backendDay?.applicationCount ?? 0,
+        audioUploadCount: backendDay?.audioUploadCount ?? 0,
+        mockInterviewCount: backendDay?.mockInterviewCount ?? 0,
+        totalCount: backendDay?.totalCount ?? (isToday ? todayActivityCount : 0),
+        level: backendDay?.level ?? (isToday ? todayActivityLevel : 0),
+        isToday,
+      };
+    });
+
+    return {
+      year,
+      month,
+      firstWeekday,
+      days,
+      zhMonth: `${month + 1}月`,
+      enMonth: new Intl.DateTimeFormat("en-US", { month: "long" }).format(visibleMonth).toUpperCase(),
+    };
+  }, [activityDays, today, todayActivityCount, todayActivityLevel, visibleMonth]);
 
   const getHeatmapColorClass = (level: number) => {
     switch (level) {
@@ -59,6 +81,16 @@ export default function WorkbenchView({
       default:
         return "bg-heatmap-0 hover:bg-zinc-200 text-outline-variant";
     }
+  };
+
+  const changeMonth = (offset: number) => {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+    setActiveTooltip(null);
+  };
+
+  const goToToday = () => {
+    setVisibleMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    setActiveTooltip(formatDateKey(today));
   };
 
   return (
@@ -94,14 +126,33 @@ export default function WorkbenchView({
           </div>
           <div className="bg-white border border-border-subtle p-4 rounded-xl shadow-sm relative">
             <div className="flex justify-between items-center mb-3">
-              <h3 className="font-sans text-base font-bold text-primary">六月 / JUNE</h3>
+              <div>
+                <p className="font-mono text-[10px] font-bold text-outline">{monthMeta.year}</p>
+                <h3 className="font-sans text-base font-bold text-primary">
+                  {monthMeta.zhMonth} / {monthMeta.enMonth}
+                </h3>
+              </div>
               <div className="flex gap-1">
-                <span className="material-symbols-outlined text-outline-variant cursor-pointer text-lg hover:text-primary">
+                <button
+                  type="button"
+                  onClick={() => changeMonth(-1)}
+                  className="h-7 w-7 rounded-full flex items-center justify-center text-outline-variant hover:bg-surface-container-low hover:text-primary active:scale-95 transition-all"
+                  aria-label="查看上个月"
+                >
+                  <span className="material-symbols-outlined text-lg">
                   keyboard_arrow_up
-                </span>
-                <span className="material-symbols-outlined text-outline-variant cursor-pointer text-lg hover:text-primary">
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeMonth(1)}
+                  className="h-7 w-7 rounded-full flex items-center justify-center text-outline-variant hover:bg-surface-container-low hover:text-primary active:scale-95 transition-all"
+                  aria-label="查看下个月"
+                >
+                  <span className="material-symbols-outlined text-lg">
                   keyboard_arrow_down
-                </span>
+                  </span>
+                </button>
               </div>
             </div>
 
@@ -112,21 +163,29 @@ export default function WorkbenchView({
                   {w}
                 </div>
               ))}
-              {heatmapData.map((item) => (
+              {Array.from({ length: monthMeta.firstWeekday }, (_, index) => (
+                <div key={`empty-${index}`} className="w-full aspect-square" aria-hidden="true" />
+              ))}
+              {monthMeta.days.map((item) => (
                 <div
-                  key={item.day}
-                  onMouseEnter={() => setActiveTooltip(item.day)}
+                  key={item.date}
+                  onMouseEnter={() => setActiveTooltip(item.date)}
                   onMouseLeave={() => setActiveTooltip(null)}
-                  onClick={() => setActiveTooltip(item.day)}
+                  onClick={() => setActiveTooltip(item.date)}
                   className={`w-full aspect-square rounded-[3px] flex items-center justify-center text-[10px] transition-all cursor-pointer relative ${getHeatmapColorClass(
                     item.level
-                  )}`}
+                  )} ${item.isToday ? "ring-2 ring-primary ring-offset-2 ring-offset-white font-bold" : ""}`}
                 >
                   {item.day}
+                  {item.isToday && (
+                    <span className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-primary" />
+                  )}
                   {/* Custom Tonal Tooltip */}
-                  {activeTooltip === item.day && (
+                  {activeTooltip === item.date && (
                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-28 bg-inverse-surface text-inverse-on-surface text-[10px] rounded p-2 z-50 shadow-lg pointer-events-none text-center">
-                      <p className="font-mono font-bold text-primary-container">6月{item.day}日</p>
+                      <p className="font-mono font-bold text-primary-container">
+                        {monthMeta.month + 1}月{item.day}日
+                      </p>
                       <p className="font-sans">投递 <b>{item.applicationCount}</b> 次</p>
                       <p className="font-sans">上传录音 <b>{item.audioUploadCount}</b> 次</p>
                       <p className="font-sans">模拟面试 <b>{item.mockInterviewCount}</b> 次</p>
@@ -136,6 +195,14 @@ export default function WorkbenchView({
                 </div>
               ))}
             </div>
+            <button
+              type="button"
+              onClick={goToToday}
+              className="absolute bottom-4 right-4 h-10 w-10 rounded-lg bg-primary text-white shadow-md flex items-center justify-center active:scale-95 hover:bg-primary/90 transition-all"
+              aria-label="定位到今天"
+            >
+              <span className="material-symbols-outlined text-[22px]">today</span>
+            </button>
           </div>
         </section>
 
@@ -263,5 +330,21 @@ export default function WorkbenchView({
         </section>
       </main>
     </div>
+  );
+}
+
+function formatDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function isSameDay(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
   );
 }
