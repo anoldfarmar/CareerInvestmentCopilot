@@ -60,6 +60,7 @@ interface BackendResume {
   name?: string | null;
   updatedAt?: string;
   optimizedContent?: unknown;
+  jdMatchResult?: unknown;
   structuredContent?: unknown;
   parseStatus?: string | null;
   structureStatus?: string | null;
@@ -67,6 +68,18 @@ interface BackendResume {
   finalizedAt?: string | null;
   originalFileName?: string | null;
   originalFileUrl?: string | null;
+}
+
+export interface BackendResumeVersion {
+  id: number;
+  resumeId: number;
+  version: number;
+  label: string;
+  source: string;
+  content: unknown;
+  notes?: unknown;
+  isFinal: boolean;
+  createdAt?: string;
 }
 
 export interface BackendReport {
@@ -405,6 +418,11 @@ export const backendApi = {
     return uploadResumeForParsing(file);
   },
   syncResumeParse: (id: string | number) => apiRequest<BackendResume>(`/resumes/${id}/parse`),
+  updateResume: (id: string | number, input: { title: string }) =>
+    apiRequest<BackendResume>(`/resumes/${id}`, {
+      method: "PATCH",
+      body: { title: input.title.trim() },
+    }),
   structureResume: (id: string | number) =>
     apiRequest<BackendResume>(`/resumes/${id}/structure`, {
       method: "POST",
@@ -417,6 +435,18 @@ export const backendApi = {
       method: "POST",
       body: toOptimizeResumeBody(input),
     }),
+  resumeVersions: (id: string | number) =>
+    apiRequest<BackendResumeVersion[]>(`/resumes/${id}/versions`),
+  updateResumeVersion: (id: string | number, versionId: string | number, label: string) =>
+    apiRequest<BackendResumeVersion>(`/resumes/${id}/versions/${versionId}`, {
+      method: "PATCH",
+      body: { label: label.trim() },
+    }),
+  saveOptimizedResume: (id: string | number, content: unknown) =>
+    apiRequest<BackendResume>(`/resumes/${id}/optimized-content`, {
+      method: "PUT",
+      body: content,
+    }),
   finalizeResume: (id: string | number, label?: string) =>
     apiRequest<BackendResume>(`/resumes/${id}/finalize`, {
       method: "POST",
@@ -425,7 +455,7 @@ export const backendApi = {
   exportResumePdf: (id: string | number, template = "classic") =>
     apiBlobRequest(`/resumes/${id}/export/pdf?template=${encodeURIComponent(template)}`, {
       method: "POST",
-    }),
+    }, 60_000),
   deleteResume: (id: string | number) =>
     apiRequest<BackendResume>(`/resumes/${id}`, {
       method: "DELETE",
@@ -650,35 +680,71 @@ function uploadFormWithProgress<T>(
   });
 }
 
-async function apiBlobRequest(path: string, options: RequestInit = {}) {
+async function apiBlobRequest(path: string, options: RequestInit = {}, timeoutMs = 45_000) {
   const token = getAuthToken();
   const headers = new Headers(options.headers);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
 
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("PDF 导出超时，请稍后重试。");
+    }
+    throw new Error(`无法连接后端 ${API_BASE_URL}${path}，PDF 导出失败。`);
+  } finally {
+    window.clearTimeout(timeout);
+  }
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `API request failed with ${response.status}`);
+    const details = await readResponse(response);
+    const message =
+      typeof details === "object" && details && "message" in details
+        ? String((details as { message: unknown }).message)
+        : typeof details === "string" && details
+          ? details
+          : `PDF 导出失败，状态码 ${response.status}`;
+    throw new Error(message);
   }
 
   return response.blob();
 }
 
+async function readResponse(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  return response.text();
+}
+
 export function mapBackendJob(job: BackendJob): Job {
+  const company = job.company?.trim() || "未知公司";
+
   return {
     id: String(job.id),
     title: job.title,
-    company: job.company,
+    company,
     logoUrl: "",
-    logoAlt: job.company,
+    logoAlt: company,
     description: job.description ?? "暂无岗位描述",
+    sourceUrl: job.sourceUrl ?? undefined,
+    salary: job.salary ?? undefined,
+    location: job.location ?? undefined,
+    notes: job.notes ?? undefined,
+    priority: job.priority === "urgent" ? "urgent" : "normal",
+    status: job.status ?? undefined,
+    updatedAt: formatDate(job.updatedAt),
     matchScore: statusToScore(job.status),
     tag: job.tags?.[0] ?? statusToLabel(job.status),
   };
@@ -707,13 +773,16 @@ export function mapBackendResume(resume: BackendResume): Resume {
 
   return {
     id: String(resume.id),
-    name: resume.originalFileName ?? resume.title ?? resume.name ?? `简历 #${resume.id}`,
+    name: resume.title ?? resume.originalFileName ?? resume.name ?? `简历 #${resume.id}`,
     tag,
     lastUpdated: formatDate(resume.updatedAt),
     wellness: resume.optimizedContent ? 92 : resume.structuredContent ? 78 : 52,
     keywordCount: resume.optimizedContent || resume.structuredContent ? 32 : 0,
     fileUrl: resume.originalFileUrl ?? undefined,
     isInterviewReady: Boolean(resume.optimizedContent || resume.structuredContent),
+    structuredContent: resume.structuredContent,
+    optimizedContent: resume.optimizedContent,
+    jdMatchResult: resume.jdMatchResult,
   };
 }
 

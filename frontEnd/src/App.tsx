@@ -206,6 +206,15 @@ export default function App() {
     setResumes((prev) => prev.filter((resume) => resume.id !== id));
   };
 
+  const handleRenameResume = async (id: string, title: string) => {
+    const updated = await backendApi.updateResume(id, { title });
+    const nextResume = mapBackendResume(updated);
+    setResumes((prev) =>
+      prev.map((resume) => (resume.id === String(updated.id) ? nextResume : resume)),
+    );
+    return updated;
+  };
+
   const handleOptimizeResume = async (
     id: string,
     input: { jobDescription?: string; additionalInstruction?: string },
@@ -216,6 +225,27 @@ export default function App() {
       prev.map((resume) => (resume.id === String(optimized.id) ? nextResume : resume)),
     );
     return optimized;
+  };
+
+  const handleLoadResumeVersions = async (id: string) => {
+    return backendApi.resumeVersions(id);
+  };
+
+  const handleSaveOptimizedResume = async (id: string, content: unknown) => {
+    const saved = await backendApi.saveOptimizedResume(id, content);
+    const nextResume = mapBackendResume(saved);
+    setResumes((prev) =>
+      prev.map((resume) => (resume.id === String(saved.id) ? nextResume : resume)),
+    );
+    return saved;
+  };
+
+  const handleRenameOptimizeHistory = async (
+    resumeId: string,
+    versionId: number,
+    label: string,
+  ) => {
+    return backendApi.updateResumeVersion(resumeId, versionId, label);
   };
 
   const handleFinalizeResume = async (id: string, label?: string) => {
@@ -229,6 +259,10 @@ export default function App() {
 
   const handleExportResumePdf = async (id: string) => {
     const blob = await backendApi.exportResumePdf(id, "classic");
+    if (!blob.size) {
+      throw new Error("PDF 文件为空，请稍后重试。");
+    }
+
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -236,7 +270,7 @@ export default function App() {
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   };
 
   const handleRefreshPipeline = async () => {
@@ -246,6 +280,13 @@ export default function App() {
   const handleDeleteJob = async (id: string) => {
     await backendApi.deleteJob(id);
     handleJobsChanged(jobs.filter((job) => job.id !== id));
+  };
+
+  const handleUpdateJob = async (id: string, input: Partial<Pick<Job, "notes">>) => {
+    const updated = await backendApi.updateJob(id, input);
+    const nextJob = mapBackendJob(updated);
+    handleJobsChanged(jobs.map((job) => (job.id === id ? nextJob : job)));
+    return nextJob;
   };
 
   // Prepare setups parameters
@@ -407,6 +448,8 @@ export default function App() {
           <JobMatchingView
             jobs={jobs}
             onDeleteJob={handleDeleteJob}
+            onUpdateJob={handleUpdateJob}
+            onJobsChanged={handleJobsChanged}
             onNavigate={(v) => {
               setCurrentView(v);
               if (["workbench", "matching", "knowledge", "profile"].includes(v)) {
@@ -450,6 +493,7 @@ export default function App() {
             resumes={resumes}
             onUploadResume={handleUploadResume}
             onDeleteResume={handleDeleteResume}
+            onRenameResume={handleRenameResume}
             deliveryCount={deliveryCount}
             interviewCount={interviewCount}
             onLogout={handleLogout}
@@ -461,8 +505,12 @@ export default function App() {
             resumes={resumes}
             onUploadResume={handleUploadResume}
             onOptimizeResume={handleOptimizeResume}
+            onLoadOptimizeHistory={handleLoadResumeVersions}
+            onSaveOptimizeResult={handleSaveOptimizedResume}
+            onRenameOptimizeHistory={handleRenameOptimizeHistory}
             onFinalizeResume={handleFinalizeResume}
             onExportResumePdf={handleExportResumePdf}
+            onDeleteResume={handleDeleteResume}
             onNavigate={(v) => {
               setCurrentView(v);
               setActiveTab(v);

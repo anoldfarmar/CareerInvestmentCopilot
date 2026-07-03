@@ -10,6 +10,8 @@ type Browser = import('puppeteer').Browser;
 type PuppeteerModule = typeof import('puppeteer');
 type LaunchOptions = Parameters<PuppeteerModule['default']['launch']>[0];
 
+const PDF_EXPORT_TIMEOUT_MS = 45_000;
+
 @Injectable()
 export class ResumePdfService {
   renderHtml(title: string, resume: ResumePdfContent, template: ResumePdfTemplate = 'classic') {
@@ -29,20 +31,28 @@ export class ResumePdfService {
       const { default: puppeteer } = (await import('puppeteer')) as PuppeteerModule;
       browser = await puppeteer.launch(this.getLaunchOptions());
       const page = await browser.newPage();
-      await page.setContent(html, {
-        waitUntil: 'domcontentloaded',
-      });
+      page.setDefaultTimeout(PDF_EXPORT_TIMEOUT_MS);
 
-      const pdf = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: {
-          top: '14mm',
-          right: '14mm',
-          bottom: '14mm',
-          left: '14mm',
-        },
-      });
+      await this.withTimeout(
+        page.setContent(html, {
+          waitUntil: 'domcontentloaded',
+        }),
+        'PDF 页面渲染超时',
+      );
+
+      const pdf = await this.withTimeout(
+        page.pdf({
+          format: 'A4',
+          printBackground: true,
+          margin: {
+            top: '14mm',
+            right: '14mm',
+            bottom: '14mm',
+            left: '14mm',
+          },
+        }),
+        'PDF 文件生成超时',
+      );
 
       return Buffer.from(pdf);
     } catch (error) {
@@ -61,6 +71,7 @@ export class ResumePdfService {
     return {
       headless: true,
       ...(executablePath ? { executablePath } : {}),
+      timeout: PDF_EXPORT_TIMEOUT_MS,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     };
   }
@@ -68,6 +79,10 @@ export class ResumePdfService {
   private findBrowserExecutablePath() {
     const candidates = [
       process.env.PUPPETEER_EXECUTABLE_PATH,
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
       'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
       'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -75,6 +90,21 @@ export class ResumePdfService {
     ].filter(Boolean) as string[];
 
     return candidates.find((path) => existsSync(path));
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, message: string) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(message)), PDF_EXPORT_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   }
 
   assertExportable(resume?: ResumePdfContent | null): asserts resume is ResumePdfContent {

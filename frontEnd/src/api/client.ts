@@ -1,4 +1,10 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+const defaultApiBaseUrl =
+  typeof window === "undefined"
+    ? "http://localhost:8001"
+    : `${window.location.protocol}//${window.location.hostname}:8001`;
+
+export const API_BASE_URL = viteEnv?.VITE_API_BASE_URL ?? defaultApiBaseUrl;
 const TOKEN_KEY = "career-investment-token";
 
 export class ApiError extends Error {

@@ -18,6 +18,11 @@ const STAGES: Array<{ key: JobStage; label: string; icon: string; accent: string
 ];
 
 const STATUS_ORDER: JobStage[] = ["applied", "interviewing", "offer"];
+const STAGE_LABELS: Record<JobStage, string> = {
+  applied: "已投递",
+  interviewing: "面试中",
+  offer: "Offer",
+};
 
 const emptyForm = {
   company: "",
@@ -58,6 +63,8 @@ export default function DeliveryManagementView({
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [notice, setNotice] = useState<{ type: "success" | "warning" | "error"; text: string } | null>(null);
+  const [shiftingJobId, setShiftingJobId] = useState<string | null>(null);
 
   const deliveryJobs = useMemo(() => visibleDeliveryJobs(jobs), [jobs]);
   const filteredJobs = useMemo(() => {
@@ -89,14 +96,41 @@ export default function DeliveryManagementView({
     onJobsChanged(jobs.map((job) => (job.id === updatedJob.id ? updatedJob : job)));
   };
 
-  const handleShiftStage = async (job: Job, direction: "prev" | "next") => {
-    const currentIndex = STATUS_ORDER.indexOf(normalizeStage(job.status));
-    const nextIndex = direction === "prev" ? currentIndex - 1 : currentIndex + 1;
-    const nextStatus = STATUS_ORDER[Math.max(0, Math.min(STATUS_ORDER.length - 1, nextIndex))];
-    if (!nextStatus || nextStatus === job.status) return;
+  const showNotice = (type: "success" | "warning" | "error", text: string) => {
+    setNotice({ type, text });
+    window.setTimeout(() => setNotice(null), 2200);
+  };
 
-    const updated = await backendApi.updateJob(job.id, { status: nextStatus });
-    updateJobLocally(mapBackendJob(updated));
+  const handleShiftStage = async (job: Job, direction: "prev" | "next") => {
+    const currentStatus = normalizeStage(job.status);
+    const currentIndex = STATUS_ORDER.indexOf(currentStatus);
+    const nextIndex = direction === "prev" ? currentIndex - 1 : currentIndex + 1;
+    const nextStatus = STATUS_ORDER[nextIndex];
+
+    if (!nextStatus) {
+      showNotice("warning", direction === "prev" ? "已经是第一个阶段" : "已经是最后一个阶段");
+      return;
+    }
+
+    const optimisticJob = {
+      ...job,
+      status: nextStatus,
+      tag: STAGE_LABELS[nextStatus],
+    };
+
+    setShiftingJobId(job.id);
+    updateJobLocally(optimisticJob);
+
+    try {
+      const updated = await backendApi.updateJob(job.id, { status: nextStatus });
+      updateJobLocally(mapBackendJob(updated));
+      showNotice("success", `已移动到${STAGE_LABELS[nextStatus]}`);
+    } catch (shiftError) {
+      updateJobLocally(job);
+      showNotice("error", shiftError instanceof Error ? shiftError.message : "移动失败，请稍后重试");
+    } finally {
+      setShiftingJobId(null);
+    }
   };
 
   const handleToggleUrgent = async (job: Job) => {
@@ -167,6 +201,22 @@ export default function DeliveryManagementView({
         </button>
       </header>
 
+      {notice && (
+        <div className="fixed left-1/2 top-[72px] z-[70] w-[calc(100%-40px)] max-w-sm -translate-x-1/2">
+          <div
+            className={`rounded-lg border px-3 py-2 text-center text-xs font-bold shadow-sm ${
+              notice.type === "success"
+                ? "border-primary/20 bg-primary-container text-on-primary-container"
+                : notice.type === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-red-200 bg-red-50 text-red-700"
+            }`}
+          >
+            {notice.text}
+          </div>
+        </div>
+      )}
+
       <main className="w-full max-w-md mx-auto px-5 pt-4 pb-28 space-y-5">
         <section className="grid grid-cols-3 gap-3">
           <PipelineStat label="投递" value={stats.applied} icon="outbox" />
@@ -221,65 +271,82 @@ export default function DeliveryManagementView({
                     暂无{stage.label}岗位
                   </div>
                 ) : (
-                  stageJobs.map((job) => (
-                    <article key={job.id} className="rounded-xl border border-border-subtle bg-white p-4 space-y-3">
-                      <div className="flex items-start gap-3">
-                        <div className="h-11 w-11 rounded-xl bg-primary-container/25 text-primary flex items-center justify-center font-bold">
-                          {companyInitial(job.company)}
+                  stageJobs.map((job) => {
+                    const currentStageIndex = STATUS_ORDER.indexOf(normalizeStage(job.status));
+                    const isShifting = shiftingJobId === job.id;
+                    const canMovePrev = currentStageIndex > 0;
+                    const canMoveNext = currentStageIndex < STATUS_ORDER.length - 1;
+
+                    return (
+                      <article key={job.id} className="rounded-xl border border-border-subtle bg-white p-4 space-y-3">
+                        <div className="flex items-start gap-3">
+                          <div className="h-11 w-11 rounded-xl bg-primary-container/25 text-primary flex items-center justify-center font-bold">
+                            {companyInitial(job.company)}
+                          </div>
+                          <button
+                            onClick={() => setExpandedJobId((current) => (current === job.id ? null : job.id))}
+                            className="min-w-0 flex-1 text-left"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <h3 className="truncate text-sm font-bold text-on-surface">{job.company}</h3>
+                              {job.priority === "urgent" && (
+                                <span className="rounded bg-tertiary-container/30 px-1.5 py-0.5 text-[9px] font-bold text-tertiary">
+                                  URGENT
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-0.5 truncate text-xs font-semibold text-primary">{job.title}</p>
+                            <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-on-surface-variant">{job.description}</p>
+                          </button>
                         </div>
-                        <button
-                          onClick={() => setExpandedJobId((current) => (current === job.id ? null : job.id))}
-                          className="min-w-0 flex-1 text-left"
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <h3 className="truncate text-sm font-bold text-on-surface">{job.company}</h3>
-                            {job.priority === "urgent" && (
-                              <span className="rounded bg-tertiary-container/30 px-1.5 py-0.5 text-[9px] font-bold text-tertiary">
-                                URGENT
-                              </span>
+
+                        <div className="flex flex-wrap gap-1.5 text-[10px] font-semibold text-on-surface-variant">
+                          {job.salary && <span className="rounded bg-surface-container-low px-2 py-1">{job.salary}</span>}
+                          {job.location && <span className="rounded bg-surface-container-low px-2 py-1">{job.location}</span>}
+                          {job.updatedAt && <span className="rounded bg-surface-container-low px-2 py-1">{job.updatedAt}</span>}
+                        </div>
+
+                        {expandedJobId === job.id && (
+                          <div className="space-y-3 border-t border-dashed border-border-subtle pt-3 animate-fade-in-up">
+                            {job.notes && <p className="text-xs leading-relaxed text-on-surface-variant">{job.notes}</p>}
+                            {job.sourceUrl && (
+                              <button
+                                onClick={() => window.open(job.sourceUrl, "_blank", "noopener,noreferrer")}
+                                className="flex w-full items-center gap-1 rounded-lg bg-surface-container-low px-2 py-1.5 text-left text-[11px] font-semibold text-primary"
+                              >
+                                <span className="material-symbols-outlined text-[14px]">link</span>
+                                <span className="min-w-0 flex-1 truncate">{job.sourceUrl}</span>
+                              </button>
                             )}
+                            <div className="grid grid-cols-5 gap-2">
+                              <IconButton
+                                icon={isShifting ? "progress_activity" : "keyboard_arrow_up"}
+                                label={isShifting ? "移动中" : "前移"}
+                                disabled={isShifting || !canMovePrev}
+                                onClick={() => void handleShiftStage(job, "prev")}
+                              />
+                              <IconButton
+                                icon={isShifting ? "progress_activity" : "keyboard_arrow_down"}
+                                label={isShifting ? "移动中" : "后移"}
+                                disabled={isShifting || !canMoveNext}
+                                onClick={() => void handleShiftStage(job, "next")}
+                              />
+                              <IconButton icon="priority_high" label="加急" onClick={() => void handleToggleUrgent(job)} />
+                              <IconButton
+                                icon="psychology"
+                                label="备战"
+                                onClick={() => {
+                                  onSelectJobForSetup(job.company, job.title);
+                                  onNavigate("interview-setup");
+                                }}
+                              />
+                              <IconButton icon="delete" label="删除" danger onClick={() => void handleDeleteJob(job)} />
+                            </div>
                           </div>
-                          <p className="mt-0.5 truncate text-xs font-semibold text-primary">{job.title}</p>
-                          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-on-surface-variant">{job.description}</p>
-                        </button>
-                      </div>
-
-                      <div className="flex flex-wrap gap-1.5 text-[10px] font-semibold text-on-surface-variant">
-                        {job.salary && <span className="rounded bg-surface-container-low px-2 py-1">{job.salary}</span>}
-                        {job.location && <span className="rounded bg-surface-container-low px-2 py-1">{job.location}</span>}
-                        {job.updatedAt && <span className="rounded bg-surface-container-low px-2 py-1">{job.updatedAt}</span>}
-                      </div>
-
-                      {expandedJobId === job.id && (
-                        <div className="space-y-3 border-t border-dashed border-border-subtle pt-3 animate-fade-in-up">
-                          {job.notes && <p className="text-xs leading-relaxed text-on-surface-variant">{job.notes}</p>}
-                          {job.sourceUrl && (
-                            <button
-                              onClick={() => window.open(job.sourceUrl, "_blank", "noopener,noreferrer")}
-                              className="flex w-full items-center gap-1 rounded-lg bg-surface-container-low px-2 py-1.5 text-left text-[11px] font-semibold text-primary"
-                            >
-                              <span className="material-symbols-outlined text-[14px]">link</span>
-                              <span className="min-w-0 flex-1 truncate">{job.sourceUrl}</span>
-                            </button>
-                          )}
-                          <div className="grid grid-cols-5 gap-2">
-                            <IconButton icon="keyboard_arrow_up" label="前移" onClick={() => void handleShiftStage(job, "prev")} />
-                            <IconButton icon="keyboard_arrow_down" label="后移" onClick={() => void handleShiftStage(job, "next")} />
-                            <IconButton icon="priority_high" label="加急" onClick={() => void handleToggleUrgent(job)} />
-                            <IconButton
-                              icon="psychology"
-                              label="备战"
-                              onClick={() => {
-                                onSelectJobForSetup(job.company, job.title);
-                                onNavigate("interview-setup");
-                              }}
-                            />
-                            <IconButton icon="delete" label="删除" danger onClick={() => void handleDeleteJob(job)} />
-                          </div>
-                        </div>
-                      )}
-                    </article>
-                  ))
+                        )}
+                      </article>
+                    );
+                  })
                 )}
               </div>
             );
@@ -358,15 +425,20 @@ function PipelineStat({ label, value, icon, active }: { label: string; value: nu
   );
 }
 
-function IconButton({ icon, label, onClick, danger }: { icon: string; label: string; onClick: () => void; danger?: boolean }) {
+function IconButton({ icon, label, onClick, danger, disabled }: { icon: string; label: string; onClick: () => void; danger?: boolean; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={`h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 text-[9px] font-bold ${
-        danger ? "bg-red-50 text-red-700" : "bg-surface-container-low text-primary"
+        disabled
+          ? "cursor-not-allowed bg-surface-container-low text-outline opacity-60"
+          : danger
+            ? "bg-red-50 text-red-700"
+            : "bg-surface-container-low text-primary active:scale-95"
       }`}
     >
-      <span className="material-symbols-outlined text-[16px]">{icon}</span>
+      <span className={`material-symbols-outlined text-[16px] ${icon === "progress_activity" ? "animate-spin" : ""}`}>{icon}</span>
       {label}
     </button>
   );

@@ -30,6 +30,9 @@ export interface Resume {
   keywordCount: number;
   fileUrl?: string;
   isInterviewReady?: boolean;
+  structuredContent?: unknown;
+  optimizedContent?: unknown;
+  jdMatchResult?: unknown;
 }
 
 export interface InterviewQuestionPreview {

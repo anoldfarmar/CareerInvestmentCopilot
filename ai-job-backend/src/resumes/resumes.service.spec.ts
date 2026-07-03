@@ -126,7 +126,7 @@ describe('ResumesService', () => {
     });
   });
 
-  it('已有优化稿时，继续优化基于当前优化稿和用户补充要求', async () => {
+  it('已有优化诊断时，继续优化仍基于原始结构化简历和用户补充要求', async () => {
     const structuredContent = {
       summary: '原始总结',
     };
@@ -162,7 +162,7 @@ describe('ResumesService', () => {
     );
 
     expect(deepseekService.optimizeResume).toHaveBeenCalledWith(
-      currentOptimizedResume,
+      structuredContent,
       '岗位要求：熟悉 TypeScript',
       '请进一步突出项目经历',
     );

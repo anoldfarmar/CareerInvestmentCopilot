@@ -14,6 +14,7 @@ import { getPagination, paginatedResponse } from '../common/pagination/paginatio
 import { PrismaService } from '../prisma/prisma.service';
 import { FinalizeResumeDto } from './dto/finalize-resume.dto';
 import { SaveOptimizedResumeDto } from './dto/save-optimized-resume.dto';
+import { JdMatchResultDto } from './dto/jd-match-result.dto';
 import { SaveResumeDraftDto } from './dto/save-resume-draft.dto';
 import { SaveStructuredResumeDto } from './dto/save-structured-resume.dto';
 import { UpdateResumeDto } from './dto/update-resume.dto';
@@ -444,12 +445,15 @@ export class ResumesService {
     const resume = await this.findOne(userId, id);
     try {
       const nextVersion = resume.optimizationVersion + 1;
+      const targetRole = data.jobSnapshot?.targetRole?.trim();
       return await this.prisma.$transaction(async (tx) => {
         await tx.resumeVersion.create({
           data: {
             resumeId: id,
             version: nextVersion,
-            label: `优化稿 v${nextVersion}`,
+            label: targetRole
+              ? `${targetRole} 优化记录`
+              : `优化稿 v${nextVersion}`,
             source: 'manual_save',
             content: data as unknown as Prisma.InputJsonValue,
             notes: data.optimizationNotes as unknown as Prisma.InputJsonValue,
@@ -545,6 +549,30 @@ export class ResumesService {
     });
   }
 
+  async updateVersionLabel(
+    userId: number,
+    id: number,
+    versionId: number,
+    label: string,
+  ) {
+    await this.findOne(userId, id);
+    const version = await this.prisma.resumeVersion.findFirst({
+      where: {
+        id: versionId,
+        resumeId: id,
+      },
+    });
+
+    if (!version) {
+      throw new NotFoundException('优化稿记录不存在');
+    }
+
+    return this.prisma.resumeVersion.update({
+      where: { id: versionId },
+      data: { label: label.trim() },
+    });
+  }
+
   // 使用 DeepSeek 将 MinerU Markdown 转为结构化 JSON，并保存进数据库。
   async structureWithAi(userId: number, id: number) {
     const resume = await this.prisma.resume.findFirst({
@@ -612,13 +640,8 @@ export class ResumesService {
       throw new BadRequestException('简历尚未结构化，请先调用结构化接口');
     }
 
-    const currentOptimizedContent = resume.optimizedContent as
-      | { optimizedResume?: unknown }
-      | null;
-    // 多轮优化时，优先基于用户当前看到或手动保存过的优化稿继续改。
-    // 如果还没有优化稿，则从用户确认后的结构化简历开始。
-    const optimizationBase =
-      currentOptimizedContent?.optimizedResume ?? resume.structuredContent;
+    // 简历优化只做 JD 诊断和修改建议，不直接替用户改写简历正文。
+    const optimizationBase = resume.structuredContent;
 
     const lock = await this.prisma.resume.updateMany({
       where: {
@@ -634,17 +657,28 @@ export class ResumesService {
     }
 
     try {
-      const optimizedContent = await this.deepseekService.optimizeResume(
+      const aiOptimizedContent = await this.deepseekService.optimizeResume(
         optimizationBase,
         jobDescription,
         additionalInstruction,
       );
+      const jdMatchResult = jobDescription?.trim()
+        ? await this.buildJdMatchResult(optimizationBase, jobDescription)
+        : null;
+      const optimizedContent = {
+        ...aiOptimizedContent,
+        optimizedResume: optimizationBase,
+        ...(jdMatchResult ? { jdMatchResult } : {}),
+      };
 
       return await this.prisma.resume.update({
         where: { id },
         data: {
           optimizedContent: optimizedContent as unknown as Prisma.InputJsonValue,
           draftContent: optimizedContent as unknown as Prisma.InputJsonValue,
+          jdMatchResult: jdMatchResult
+            ? (jdMatchResult as unknown as Prisma.InputJsonValue)
+            : undefined,
           optimizeStatus: 'done',
         },
       });
@@ -668,6 +702,127 @@ export class ResumesService {
       | { optimizedResume?: unknown }
       | null;
     const resumeContent = optimizedContent?.optimizedResume ?? resume.structuredContent;
+    const aiMatchResult = await this.buildJdMatchResult(
+      resumeContent,
+      jobDescription,
+    );
+
+    await this.prisma.resume.update({
+      where: { id },
+      data: {
+        jdMatchResult: aiMatchResult as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return aiMatchResult;
+  }
+
+  private async buildJdMatchResult(resumeContent: unknown, jobDescription: string) {
+    try {
+      const aiMatchResult = await this.deepseekService.analyzeJdMatch(
+        resumeContent,
+        jobDescription,
+      );
+      return this.normalizeJdMatchResult(aiMatchResult);
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'resume.jd_match.ai_failed',
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      return this.analyzeJdMatchByHeuristic(resumeContent, jobDescription);
+    }
+  }
+
+  private normalizeJdMatchResult(result: JdMatchResultDto) {
+    const allowedCategories = [
+      'mustHave',
+      'niceToHave',
+      'degree',
+      'experience',
+      'techStack',
+      'jobDuties',
+    ];
+    const categoryWeights: Record<string, number> = {
+      mustHave: 0.5,
+      degree: 0.5,
+      experience: 0.5,
+      niceToHave: 0.2,
+      techStack: 0.2,
+      jobDuties: 0.1,
+    };
+    const matches = (result.matches ?? []).map((match, index) => ({
+      requirementId: match.requirementId || `${match.category || 'mustHave'}-${index + 1}`,
+      requirementText: match.requirementText,
+      category: allowedCategories.includes(match.category)
+        ? match.category
+        : 'mustHave',
+      score: this.clampMatchScore(match.score),
+      evidence: Array.isArray(match.evidence) ? match.evidence : [],
+      rationale: match.rationale,
+      ...(match.correction ? { correction: match.correction } : {}),
+    }));
+    const byCategory = allowedCategories.reduce<Record<string, number>>(
+      (acc, category) => {
+        const scores = matches
+          .filter((match) => match.category === category)
+          .map((match) => match.score);
+        acc[category] = scores.length
+          ? Number((scores.reduce((sum, score) => sum + score, 0) / scores.length).toFixed(2))
+          : 0;
+        return acc;
+      },
+      {},
+    );
+    const weightedMax = allowedCategories.reduce((sum, category) => {
+      return byCategory[category] > 0 ? sum + categoryWeights[category] : sum;
+    }, 0);
+    const weightedTotal = allowedCategories.reduce((sum, category) => {
+      return byCategory[category] > 0
+        ? sum + byCategory[category] * categoryWeights[category]
+        : sum;
+    }, 0);
+    const percent = weightedMax > 0
+      ? Number((weightedTotal / weightedMax).toFixed(2))
+      : this.clampMatchScore(result.summary?.percent ?? 0);
+    const gaps = matches
+      .filter((match) => match.score < 1)
+      .map((match) => ({
+        id: match.requirementId,
+        category: match.category,
+        text: match.requirementText,
+      }));
+
+    return {
+      summary: {
+        totalScore: Number(weightedTotal.toFixed(2)),
+        maxScore: Number(weightedMax.toFixed(2)),
+        percent,
+        byCategory,
+      },
+      headline: result.headline || this.buildMatchHeadline(percent),
+      matches,
+      gaps,
+    };
+  }
+
+  private clampMatchScore(score: unknown) {
+    const numberValue = typeof score === 'number' ? score : Number(score);
+    if (!Number.isFinite(numberValue)) return 0;
+    if (numberValue > 1 && numberValue <= 100) {
+      return Math.max(0, Math.min(1, numberValue / 100));
+    }
+    return Math.max(0, Math.min(1, numberValue));
+  }
+
+  private buildMatchHeadline(percent: number) {
+    if (percent >= 0.8) return '简历与 JD 匹配度较高，建议继续补强关键证据。';
+    if (percent >= 0.55) return '简历覆盖部分 JD 要求，但核心证据仍需加强。';
+    return '简历与 JD 的显性匹配较弱，需要优先补齐关键经历证据。';
+  }
+
+  private analyzeJdMatchByHeuristic(resumeContent: unknown, jobDescription: string) {
     const resumeText = this.flattenResumeText(resumeContent);
     const jdKeywords = this.extractJdKeywords(jobDescription);
 
@@ -731,10 +886,46 @@ export class ResumesService {
       structure,
     );
 
-    const result = {
-      resumeId: id,
-      totalScore,
-      summary:
+    const percent = Number((totalScore / 100).toFixed(2));
+    const matches = jdKeywords.map((keyword, index) => ({
+      requirementId: `keyword-${index + 1}`,
+      requirementText: keyword,
+      category: 'techStack',
+      score: matchedKeywords.includes(keyword) ? 0.5 : 0,
+      evidence: matchedKeywords.includes(keyword)
+        ? [`简历文本命中关键词：${keyword}`]
+        : [],
+      rationale: matchedKeywords.includes(keyword)
+        ? '简历中出现了该关键词，但未必具备完整项目证据。'
+        : '简历中未发现该关键词。',
+    }));
+    const gaps = missingKeywords.map((keyword, index) => ({
+      id: `keyword-${index + 1}`,
+      category: 'techStack',
+      text: keyword,
+    }));
+
+    return {
+      summary: {
+        totalScore: percent,
+        maxScore: 1,
+        percent,
+        byCategory: {
+          mustHave: 0,
+          niceToHave: 0,
+          degree: 0,
+          experience: 0,
+          techStack: Number((keywordCoverage / 100).toFixed(2)),
+          jobDuties: 0,
+        },
+      },
+      headline:
+        missingKeywords.length === 0
+          ? '关键词覆盖较完整，但仍需强化经历证据。'
+          : '关键词覆盖不足，建议优先补齐 JD 核心要求证据。',
+      matches,
+      gaps,
+      legacySummary:
         missingKeywords.length === 0
           ? '这份简历已覆盖当前 JD 的主要关键词，建议继续强化经历中的结果证据。'
           : `这份简历与 JD 有一定匹配度，但仍缺少 ${missingKeywords
@@ -754,15 +945,6 @@ export class ResumesService {
         severity: index < 3 ? 'high' : 'medium',
       })),
     };
-
-    await this.prisma.resume.update({
-      where: { id },
-      data: {
-        jdMatchResult: result as unknown as Prisma.InputJsonValue,
-      },
-    });
-
-    return result;
   }
 
   private flattenResumeText(value: unknown): string {

@@ -7,10 +7,15 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { SaveOptimizedResumeDto } from './dto/save-optimized-resume.dto';
 import { SaveStructuredResumeDto } from './dto/save-structured-resume.dto';
+import { JdMatchResultDto } from './dto/jd-match-result.dto';
 import {
   createResumeOptimizeUserPrompt,
   RESUME_OPTIMIZE_SYSTEM_PROMPT,
 } from './prompts/resume-optimize.prompt';
+import {
+  createResumeJdMatchUserPrompt,
+  RESUME_JD_MATCH_SYSTEM_PROMPT,
+} from './prompts/resume-jd-match.prompt';
 import {
   createResumeStructureUserPrompt,
   RESUME_STRUCTURE_SYSTEM_PROMPT,
@@ -61,6 +66,16 @@ export class DeepseekService {
     );
 
     return this.parseAndValidate(content, SaveOptimizedResumeDto, '优化稿结构');
+  }
+
+  // 计算简历与 JD 的逐条要求匹配度，结构参考 exp-JDresume 的 JDMatchResult。
+  async analyzeJdMatch(structuredResume: unknown, jobDescription: string) {
+    const content = await this.chatJson(
+      RESUME_JD_MATCH_SYSTEM_PROMPT,
+      createResumeJdMatchUserPrompt(structuredResume, jobDescription),
+    );
+
+    return this.parseAndValidate(content, JdMatchResultDto, 'JD 匹配度结构');
   }
 
   // 大模型输出不能直接入库：先解析 JSON，再复用 DTO 做严格校验。

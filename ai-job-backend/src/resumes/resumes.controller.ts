@@ -42,6 +42,7 @@ import { OptimizeResumeDto } from './dto/optimize-resume.dto';
 import { SaveOptimizedResumeDto } from './dto/save-optimized-resume.dto';
 import { SaveResumeDraftDto } from './dto/save-resume-draft.dto';
 import { SaveStructuredResumeDto } from './dto/save-structured-resume.dto';
+import { UpdateResumeVersionDto } from './dto/update-resume-version.dto';
 import { UpdateResumeDto } from './dto/update-resume.dto';
 import { ResumesService } from './resumes.service';
 import { normalizeResumePdfTemplate } from './pdf-templates';
@@ -206,6 +207,24 @@ export class ResumesController {
   @ApiParam({ name: 'id', description: '简历 id', example: 1 })
   findVersions(@CurrentUser() user: AuthUser, @Param('id', ParseIntPipe) id: number) {
     return this.resumesService.findVersions(user.id, id);
+  }
+
+  @Patch(':id/versions/:versionId')
+  @ApiOperation({ summary: '修改简历优化稿历史记录名称' })
+  @ApiParam({ name: 'id', description: '简历 id', example: 1 })
+  @ApiParam({ name: 'versionId', description: '优化稿历史记录 id', example: 1 })
+  updateVersionLabel(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Body() body: UpdateResumeVersionDto,
+  ) {
+    return this.resumesService.updateVersionLabel(
+      user.id,
+      id,
+      versionId,
+      body.label,
+    );
   }
 
   // POST /resumes/:id/optimize 使用 DeepSeek 生成优化稿。

@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { BackendProfile, backendApi } from "../api/backend";
+import { API_BASE_URL } from "../api/client";
 import { Resume } from "../types";
 
 interface ProfileViewProps {
   resumes: Resume[];
   onUploadResume: (file: File) => Promise<void>;
   onDeleteResume: (id: string) => Promise<void>;
+  onRenameResume: (id: string, title: string) => Promise<unknown>;
   deliveryCount: number;
   interviewCount: number;
   onLogout: () => void;
@@ -59,10 +61,17 @@ const defaultProfile: BackendProfile = {
   showStarTips: true,
 };
 
+type PdfPreviewState = {
+  resumeName: string;
+  url: string;
+  isObjectUrl: boolean;
+};
+
 export default function ProfileView({
   resumes,
   onUploadResume,
   onDeleteResume,
+  onRenameResume,
   deliveryCount,
   interviewCount,
   onLogout,
@@ -77,6 +86,11 @@ export default function ProfileView({
   const [uploadError, setUploadError] = useState("");
   const [swipedResumeId, setSwipedResumeId] = useState<string | null>(null);
   const [deletingResumeId, setDeletingResumeId] = useState<string | null>(null);
+  const [previewingResumeId, setPreviewingResumeId] = useState<string | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<PdfPreviewState | null>(null);
+  const [renameResume, setRenameResume] = useState<Resume | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
   const touchStartX = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const averageWellness =
@@ -90,6 +104,14 @@ export default function ProfileView({
   useEffect(() => {
     void loadProfile();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pdfPreview?.isObjectUrl) {
+        URL.revokeObjectURL(pdfPreview.url);
+      }
+    };
+  }, [pdfPreview]);
 
   const loadProfile = async () => {
     setIsProfileLoading(true);
@@ -162,7 +184,7 @@ export default function ProfileView({
       const option = jobPreferenceOptions.find((item) => item.value === category);
       const current = normalizeDirections(prev.targetDirections, prev.targetDirection);
       const selected = current.includes(category);
-      const childDirections = option ? [...option.directions] : [];
+      const childDirections: string[] = option ? [...option.directions] : [];
       const nextDirections = selected
         ? current.filter((item) => item !== category && !childDirections.includes(item))
         : [...current, category];
@@ -178,7 +200,7 @@ export default function ProfileView({
   const toggleSubDirection = (direction: string) => {
     setDraftProfile((prev) => {
       const current = normalizeDirections(prev.targetDirections, prev.targetDirection);
-      const parent = jobPreferenceOptions.find((item) => [...item.directions].includes(direction));
+      const parent = jobPreferenceOptions.find((item) => ([...item.directions] as string[]).includes(direction));
       const withParent = parent && !current.includes(parent.value) ? [...current, parent.value] : current;
       const nextDirections = withParent.includes(direction)
         ? withParent.filter((item) => item !== direction)
@@ -246,6 +268,93 @@ export default function ProfileView({
       setUploadError(error instanceof Error ? error.message : "简历删除失败，请稍后重试");
     } finally {
       setDeletingResumeId(null);
+    }
+  };
+
+  const handlePreviewResume = async (resume: Resume) => {
+    if (previewingResumeId) return;
+
+    setUploadError("");
+    setPreviewingResumeId(resume.id);
+
+    try {
+      if (isPdfResume(resume) && resume.fileUrl) {
+        openPdfPreview({
+          resumeName: resume.name,
+          url: toAbsoluteUrl(resume.fileUrl),
+          isObjectUrl: false,
+        });
+        return;
+      }
+
+      const blob = await backendApi.exportResumePdf(resume.id, "classic");
+      if (!blob.size) {
+        throw new Error("PDF 文件为空，请稍后重试。");
+      }
+
+      const url = URL.createObjectURL(blob);
+      openPdfPreview({
+        resumeName: resume.name,
+        url,
+        isObjectUrl: true,
+      });
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "PDF 预览失败，请稍后重试");
+    } finally {
+      setPreviewingResumeId(null);
+    }
+  };
+
+  const openPdfPreview = (nextPreview: PdfPreviewState) => {
+    setPdfPreview((current) => {
+      if (current?.isObjectUrl) {
+        URL.revokeObjectURL(current.url);
+      }
+      return nextPreview;
+    });
+  };
+
+  const closePdfPreview = () => {
+    setPdfPreview((current) => {
+      if (current?.isObjectUrl) {
+        URL.revokeObjectURL(current.url);
+      }
+      return null;
+    });
+  };
+
+  const openRenameDialog = (resume: Resume) => {
+    setUploadError("");
+    setRenameResume(resume);
+    setRenameValue(resume.name);
+  };
+
+  const closeRenameDialog = () => {
+    if (isRenaming) return;
+    setRenameResume(null);
+    setRenameValue("");
+  };
+
+  const handleRenameSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!renameResume || isRenaming) return;
+
+    const nextTitle = renameValue.trim();
+    if (!nextTitle) {
+      setUploadError("简历名称不能为空");
+      return;
+    }
+
+    setUploadError("");
+    setIsRenaming(true);
+    try {
+      await onRenameResume(renameResume.id, nextTitle);
+      setRenameResume(null);
+      setRenameValue("");
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "简历重命名失败，请稍后重试");
+    } finally {
+      setIsRenaming(false);
     }
   };
 
@@ -570,9 +679,20 @@ export default function ProfileView({
                       <span className="material-symbols-outlined text-[24px]">description</span>
                     </div>
                     <div className="min-w-0">
-                      <h4 className="font-sans text-xs font-bold text-on-surface truncate pr-2">
-                        {res.name}
-                      </h4>
+                      <div className="flex items-center gap-1.5 pr-2">
+                        <h4 className="min-w-0 flex-1 font-sans text-xs font-bold text-on-surface truncate">
+                          {res.name}
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() => openRenameDialog(res)}
+                          className="shrink-0 w-6 h-6 rounded-full text-primary flex items-center justify-center hover:bg-primary-container/15 active:scale-95 transition-colors"
+                          title="编辑简历名称"
+                          aria-label={`编辑 ${res.name} 的名称`}
+                        >
+                          <span className="material-symbols-outlined text-[15px]">edit</span>
+                        </button>
+                      </div>
                       <div className="flex items-center gap-1.5 mt-1">
                         <span className="font-mono text-[9px] text-on-surface-variant">
                           更新: {res.lastUpdated}
@@ -606,9 +726,18 @@ export default function ProfileView({
                         {deletingResumeId === res.id ? "progress_activity" : "delete"}
                       </span>
                     </button>
-                    <span className="material-symbols-outlined text-lg p-1.5 hover:bg-zinc-100 rounded-full cursor-pointer hover:text-primary">
-                      chevron_right
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handlePreviewResume(res)}
+                      disabled={previewingResumeId === res.id}
+                      className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 hover:text-primary disabled:opacity-60 transition-colors"
+                      title="预览 PDF 简历"
+                      aria-label={`预览 ${res.name}`}
+                    >
+                      <span className={`material-symbols-outlined text-lg ${previewingResumeId === res.id ? "animate-spin" : ""}`}>
+                        {previewingResumeId === res.id ? "progress_activity" : "chevron_right"}
+                      </span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -671,6 +800,120 @@ export default function ProfileView({
           </div>
         </section>
       </main>
+
+      {pdfPreview && (
+        <PdfPreviewModal
+          preview={pdfPreview}
+          onClose={closePdfPreview}
+        />
+      )}
+
+      {renameResume && (
+        <ResumeRenameDialog
+          value={renameValue}
+          resumeName={renameResume.name}
+          isSaving={isRenaming}
+          onChange={setRenameValue}
+          onCancel={closeRenameDialog}
+          onSubmit={handleRenameSubmit}
+        />
+      )}
+    </div>
+  );
+}
+
+function ResumeRenameDialog({
+  value,
+  resumeName,
+  isSaving,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  value: string;
+  resumeName: string;
+  isSaving: boolean;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: (event: React.FormEvent) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[95] bg-black/45 px-5 flex items-center justify-center">
+      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-2xl bg-white border border-border-subtle shadow-2xl overflow-hidden">
+        <div className="border-b border-border-subtle px-4 py-3">
+          <h3 className="font-sans text-sm font-extrabold text-on-surface">编辑简历名称</h3>
+          <p className="mt-1 text-[10px] text-on-surface-variant truncate">{resumeName}</p>
+        </div>
+        <div className="p-4 space-y-3">
+          <label className="block">
+            <span className="font-mono text-[10px] font-bold text-outline uppercase">文件名</span>
+            <input
+              autoFocus
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              maxLength={100}
+              className="mt-1 h-11 w-full rounded-xl border border-border-subtle px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary-container/30"
+              placeholder="例如：杨子泰-后端开发简历.pdf"
+            />
+          </label>
+        </div>
+        <div className="border-t border-border-subtle p-4 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isSaving}
+            className="h-11 rounded-xl bg-surface-container-low text-xs font-bold text-on-surface-variant disabled:opacity-60"
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            disabled={isSaving || !value.trim()}
+            className="h-11 rounded-xl bg-primary text-xs font-bold text-white disabled:opacity-60 flex items-center justify-center gap-1.5"
+          >
+            <span className={`material-symbols-outlined text-[16px] ${isSaving ? "animate-spin" : ""}`}>
+              {isSaving ? "progress_activity" : "check"}
+            </span>
+            {isSaving ? "保存中" : "保存"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PdfPreviewModal({
+  preview,
+  onClose,
+}: {
+  preview: PdfPreviewState;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/50 flex items-end sm:items-center justify-center">
+      <div className="w-full max-w-md h-[88vh] sm:h-[86vh] rounded-t-2xl sm:rounded-2xl bg-white border border-border-subtle shadow-2xl overflow-hidden flex flex-col">
+        <div className="shrink-0 h-14 border-b border-border-subtle px-4 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="font-sans text-sm font-extrabold text-on-surface truncate">简历 PDF 预览</h3>
+            <p className="mt-0.5 text-[10px] text-on-surface-variant truncate">{preview.resumeName}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-9 h-9 rounded-full bg-surface-container-low text-on-surface-variant flex items-center justify-center active:scale-95"
+            aria-label="关闭简历预览"
+          >
+            <span className="material-symbols-outlined text-[18px]">close</span>
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 bg-zinc-100">
+          <iframe
+            src={preview.url}
+            title={`预览 ${preview.resumeName}`}
+            className="w-full h-full border-0 bg-white"
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -725,6 +968,15 @@ function normalizeDirections(value: string[], primary?: string) {
 
 function directionLabel(value: string) {
   return jobPreferenceLabels[value] ?? value;
+}
+
+function isPdfResume(resume: Resume) {
+  return /\.pdf($|\?)/i.test(resume.fileUrl ?? "") || /\.pdf$/i.test(resume.name);
+}
+
+function toAbsoluteUrl(url: string) {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${API_BASE_URL}${url.startsWith("/") ? url : `/${url}`}`;
 }
 
 function jobModeLabel(value: string) {
