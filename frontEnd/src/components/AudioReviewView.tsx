@@ -316,9 +316,11 @@ export default function AudioReviewView({
 
 export function AudioReviewResult({
   record,
+  knowledgeBaseName,
   onStartAnotherReview,
 }: {
   record: BackendKnowledgeRecord;
+  knowledgeBaseName?: string;
   onStartAnotherReview?: () => void;
 }) {
   const structured = normalizeStructuredContent(record.structuredContent);
@@ -380,15 +382,32 @@ export function AudioReviewResult({
             <div className="space-y-3">
               {structured.questions.map((question, index) => (
                 <div key={`${question.question}-${index}`} className="rounded-lg bg-surface-container-low p-3">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-start justify-between gap-2">
                     <p className="text-xs font-extrabold text-on-surface leading-snug">
                       {index + 1}. {question.question}
                     </p>
-                    {question.difficulty && (
-                      <span className="text-[9px] font-mono text-outline bg-white rounded px-1.5 py-0.5">
-                        {question.difficulty}
-                      </span>
-                    )}
+                    <div className="flex flex-shrink-0 items-center gap-1.5">
+                      <SourcePreviewBadge
+                        preview={buildSourcePreview({
+                          record,
+                          knowledgeBaseName,
+                          sectionLabel: question.dimension || "结构化复盘",
+                          itemTitle: question.chunkTitle || question.question,
+                          sourceType: question.sourceType || "structured_question",
+                          sourceLabel: question.sourceLabel,
+                          itemKnowledgeBaseName: question.knowledgeBaseName,
+                          recordTitle: question.recordTitle,
+                          content: question.sourceContent || question.answer || question.question,
+                          keywords: question.keywords,
+                          score: question.score,
+                        })}
+                      />
+                      {question.difficulty && (
+                        <span className="text-[9px] font-mono text-outline bg-white rounded px-1.5 py-0.5">
+                          {question.difficulty}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {question.answer && (
                     <p className="mt-2 text-[11px] leading-relaxed text-on-surface-variant">
@@ -425,9 +444,25 @@ export function AudioReviewResult({
                   <p className="text-xs font-extrabold text-on-surface leading-snug">
                     {chunk.title || `片段 ${index + 1}`}
                   </p>
-                  <span className="text-[9px] font-mono text-primary bg-primary-container/15 rounded px-1.5 py-0.5">
-                    {chunk.sourceType || "chunk"}
-                  </span>
+                  <div className="flex flex-shrink-0 items-center gap-1.5">
+                    <SourcePreviewBadge
+                      preview={buildSourcePreview({
+                        record,
+                        knowledgeBaseName,
+                        sectionLabel: sourceTypeLabel(chunk.sourceType || "chunk"),
+                        itemTitle: chunk.chunkTitle || chunk.title || `Chunk ${index + 1}`,
+                        sourceType: chunk.sourceType || "chunk",
+                        itemKnowledgeBaseName: chunk.knowledgeBaseName,
+                        recordTitle: chunk.recordTitle,
+                        content: chunk.content,
+                        keywords: chunk.keywords,
+                        score: chunk.score,
+                      })}
+                    />
+                    <span className="text-[9px] font-mono text-primary bg-primary-container/15 rounded px-1.5 py-0.5">
+                      {sourceTypeLabel(chunk.sourceType || "chunk")}
+                    </span>
+                  </div>
                 </div>
                 <p className="mt-2 text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">
                   {chunk.content}
@@ -515,6 +550,180 @@ function ListGroup({ title, items }: { title?: string; items: string[] }) {
   );
 }
 
+type KnowledgeSourcePreview = {
+  originLabel: string;
+  knowledgeBaseName?: string;
+  recordTitle?: string;
+  sectionLabel: string;
+  chunkTitle?: string;
+  content?: string;
+  keywords: string[];
+  score?: number;
+};
+
+function SourcePreviewBadge({ preview }: { preview: KnowledgeSourcePreview }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const rows: Array<[string, string | undefined]> = [
+    ["来源", preview.originLabel],
+    ["知识库", preview.knowledgeBaseName],
+    ["知识记录", preview.recordTitle],
+    ["位置", preview.sectionLabel],
+    ["片段", preview.chunkTitle],
+    ["匹配度", formatPreviewScore(preview.score)],
+  ].filter((item): item is [string, string] => Boolean(item[1]));
+  const previewTitle = [preview.knowledgeBaseName, preview.recordTitle, preview.chunkTitle]
+    .filter(Boolean)
+    .join(" / ");
+
+  return (
+    <div
+      className="relative inline-flex flex-shrink-0"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          setIsOpen(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        className="inline-flex h-6 items-center gap-1 rounded-full border border-primary-container/50 bg-white px-2 text-[9px] font-mono font-bold text-primary shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-container/60"
+        onClick={() => setIsOpen((value) => !value)}
+        title={previewTitle || preview.originLabel}
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        aria-label={`查看来源：${previewTitle || preview.originLabel}`}
+      >
+        <span className="material-symbols-outlined text-[13px]">database_search</span>
+        <span>来源</span>
+      </button>
+      {isOpen && (
+        <>
+          <button
+            type="button"
+            aria-label="关闭来源预览"
+            className="fixed inset-0 z-40 cursor-default bg-transparent"
+            onClick={() => setIsOpen(false)}
+          />
+          <div
+            role="dialog"
+            aria-label="来源预览"
+            className="fixed left-4 right-4 top-1/2 z-50 flex max-h-[80vh] -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border-subtle bg-white p-3 text-left shadow-xl sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-2 sm:w-72 sm:max-w-[calc(100vw-3rem)] sm:translate-y-0"
+          >
+            <div className="flex items-center justify-between gap-2 text-primary">
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[15px]">travel_explore</span>
+                <p className="text-[10px] font-extrabold">来源预览</p>
+              </div>
+              <button
+                type="button"
+                className="w-6 h-6 rounded-full text-on-surface-variant hover:bg-surface-container-low flex items-center justify-center"
+                aria-label="关闭来源预览"
+                onClick={() => setIsOpen(false)}
+              >
+                <span className="material-symbols-outlined text-[15px]">close</span>
+              </button>
+            </div>
+            <div className="mt-2 min-h-0 overflow-y-auto overscroll-contain pr-1">
+              <div className="space-y-1.5">
+                {rows.map(([label, value]) => (
+                  <div key={label} className="grid grid-cols-[3.5rem_1fr] gap-2 text-[10px] leading-snug">
+                    <span className="font-mono font-bold text-outline">{label}</span>
+                    <span className="min-w-0 break-words text-on-surface-variant">{value}</span>
+                  </div>
+                ))}
+              </div>
+              {preview.content && (
+                <p className="mt-2 rounded-lg bg-surface-container-low p-2 text-[10px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">
+                  {preview.content}
+                </p>
+              )}
+              {preview.keywords.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {preview.keywords.slice(0, 8).map((keyword) => (
+                    <span key={keyword} className="rounded bg-primary-container/15 px-1.5 py-0.5 text-[9px] font-mono font-bold text-primary">
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function buildSourcePreview({
+  record,
+  knowledgeBaseName,
+  sectionLabel,
+  itemTitle,
+  sourceType,
+  sourceLabel,
+  itemKnowledgeBaseName,
+  recordTitle,
+  content,
+  keywords,
+  score,
+}: {
+  record: BackendKnowledgeRecord;
+  knowledgeBaseName?: string;
+  sectionLabel: string;
+  itemTitle?: string;
+  sourceType?: string;
+  sourceLabel?: string;
+  itemKnowledgeBaseName?: string;
+  recordTitle?: string;
+  content?: string;
+  keywords?: string[];
+  score?: number;
+}): KnowledgeSourcePreview {
+  const normalizedSourceType = sourceType || record.sourceType;
+  const resolvedKnowledgeBaseName = isProfileSourceType(normalizedSourceType)
+    ? itemKnowledgeBaseName
+    : itemKnowledgeBaseName || knowledgeBaseName;
+  return {
+    originLabel: sourceLabel || sourceTypeLabel(normalizedSourceType),
+    knowledgeBaseName: resolvedKnowledgeBaseName,
+    recordTitle: recordTitle || record.title,
+    sectionLabel,
+    chunkTitle: itemTitle,
+    content,
+    keywords: keywords ?? [],
+    score,
+  };
+}
+
+function isProfileSourceType(sourceType?: string) {
+  return sourceType === "resume" || sourceType === "job_description";
+}
+
+function sourceTypeLabel(sourceType?: string) {
+  const labels: Record<string, string> = {
+    audio: "面试录音",
+    manual: "手动知识记录",
+    summary: "结构化摘要",
+    question: "面试题目",
+    answer: "候选人回答",
+    weak_point: "薄弱点",
+    follow_up: "后续建议",
+    transcript: "ASR 转写",
+    resume: "用户简历",
+    job_description: "岗位 JD",
+    knowledge_base: "知识库片段",
+    structured_question: "结构化复盘",
+    chunk: "知识片段",
+  };
+  return labels[sourceType ?? ""] ?? sourceType ?? "知识片段";
+}
+
+function formatPreviewScore(score?: number) {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "";
+  const percentage = score <= 1 ? score * 100 : score;
+  return `${Math.round(Math.max(0, Math.min(100, percentage)))}%`;
+}
+
 function normalizeStructuredContent(value: unknown) {
   const source = isObject(value) ? value : {};
   return {
@@ -526,12 +735,20 @@ function normalizeStructuredContent(value: unknown) {
     questions: Array.isArray(source.questions)
       ? source.questions.map((item) => {
           const question = isObject(item) ? item : {};
+          const primarySource = readFirstSourceDetail(question.sourceDetails);
           return {
             question: readString(question.question),
             answer: readString(question.answer),
             dimension: readString(question.dimension),
             difficulty: readString(question.difficulty),
             keywords: readStringArray(question.keywords),
+            sourceType: readString(question.sourceType) || readString(primarySource.sourceType),
+            sourceLabel: readString(question.sourceLabel),
+            knowledgeBaseName: readString(question.knowledgeBaseName) || readString(primarySource.knowledgeBaseName),
+            recordTitle: readString(question.recordTitle) || readString(primarySource.recordTitle),
+            chunkTitle: readString(question.chunkTitle) || readString(primarySource.chunkTitle),
+            sourceContent: readString(question.sourceContent) || readString(primarySource.content),
+            score: readNumber(question.score) ?? readNumber(primarySource.score),
           };
         }).filter((item) => item.question)
       : [],
@@ -548,12 +765,26 @@ function normalizeChunks(value: unknown) {
       content: readString(chunk.content),
       sourceType: readString(chunk.sourceType),
       keywords: readStringArray(chunk.keywords),
+      knowledgeBaseName: readString(chunk.knowledgeBaseName),
+      recordTitle: readString(chunk.recordTitle),
+      chunkTitle: readString(chunk.chunkTitle),
+      score: readNumber(chunk.score),
     };
   }).filter((chunk) => chunk.content);
 }
 
+function readFirstSourceDetail(value: unknown): Record<string, unknown> {
+  if (!Array.isArray(value)) return {};
+  return isObject(value[0]) ? value[0] : {};
+}
+
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readNumber(value: unknown) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
 function readStringArray(value: unknown) {

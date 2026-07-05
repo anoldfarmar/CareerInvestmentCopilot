@@ -294,6 +294,7 @@ export default function KnowledgeBaseView(_: KnowledgeBaseViewProps) {
                 <RecordCard
                   key={record.id}
                   record={record}
+                  knowledgeBaseName={activeBase.name}
                   disabled={isSaving}
                   onBuild={() => handleBuildRecord(record)}
                   onDelete={() => handleDeleteRecord(record)}
@@ -327,6 +328,7 @@ function Metric({ value, label }: { value: number; label: string }) {
 
 function RecordCard({
   record,
+  knowledgeBaseName,
   disabled,
   onBuild,
   onDelete,
@@ -335,6 +337,7 @@ function RecordCard({
 }: {
   key?: React.Key;
   record: BackendKnowledgeRecord;
+  knowledgeBaseName?: string;
   disabled: boolean;
   onBuild: () => void;
   onDelete: () => void;
@@ -402,7 +405,7 @@ function RecordCard({
       )}
       {isExpanded && (
         <div className="mt-4 border-t border-border-subtle pt-4">
-          <AudioReviewResult record={record} />
+          <AudioReviewResult record={record} knowledgeBaseName={knowledgeBaseName} />
         </div>
       )}
     </div>
