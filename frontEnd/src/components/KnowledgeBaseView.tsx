@@ -19,7 +19,7 @@ export default function KnowledgeBaseView(_: KnowledgeBaseViewProps) {
   const [error, setError] = useState("");
   const [showBaseForm, setShowBaseForm] = useState(false);
   const [showRecordForm, setShowRecordForm] = useState(false);
-  const [baseName, setBaseName] = useState("面试复盘知识库");
+  const [baseName, setBaseName] = useState("真实面试知识库");
   const [baseDescription, setBaseDescription] = useState("");
   const [recordTitle, setRecordTitle] = useState("");
   const [recordTranscript, setRecordTranscript] = useState("");

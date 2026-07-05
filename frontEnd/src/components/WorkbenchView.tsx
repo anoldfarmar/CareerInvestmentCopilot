@@ -208,9 +208,20 @@ export default function WorkbenchView({
 
         {/* Funnel Pipeline Section */}
         <section id="funnel-pipeline-section">
-          <h2 className="font-mono text-xs font-semibold text-on-surface-variant mb-2 uppercase tracking-wider">
-            求职漏斗 / PIPELINE
-          </h2>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h2 className="font-mono text-xs font-semibold text-on-surface-variant uppercase tracking-wider">
+              求职漏斗 / PIPELINE
+            </h2>
+            <button
+              type="button"
+              onClick={() => onNavigate("delivery-management")}
+              className="h-9 min-w-0 flex-1 max-w-[220px] rounded-lg border border-primary-container/50 bg-white px-3 text-primary font-sans text-xs font-extrabold flex items-center justify-between gap-2 active:scale-95 hover:bg-primary-container/10 transition-all"
+              aria-label="打开投递管理"
+            >
+              <span className="truncate">投递管理</span>
+              <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => onNavigate("delivery-management")}
@@ -226,9 +237,6 @@ export default function WorkbenchView({
             </div>
             {/* Interview Box */}
             <div className="relative bg-white border border-border-subtle p-3 rounded-xl text-center overflow-hidden flex flex-col justify-center items-center h-24 hover:border-primary-container/40 transition-colors">
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 -mr-1">
-                <span className="material-symbols-outlined text-outline-variant/30 scale-125">chevron_right</span>
-              </div>
               <div className="font-sans text-2xl font-extrabold text-primary mb-1">{interviewCount}</div>
               <div className="font-mono text-[11px] font-bold text-on-surface-variant">面试</div>
             </div>

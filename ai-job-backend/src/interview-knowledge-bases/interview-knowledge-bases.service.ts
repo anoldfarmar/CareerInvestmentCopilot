@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ActivityService } from '../activity/activity.service';
 import { AsrService } from '../asr/asr.service';
@@ -20,6 +20,9 @@ const knowledgeBaseInclude = {
     orderBy: { createdAt: 'desc' as const },
   },
 };
+
+const MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME = '模拟面试知识库';
+const REAL_INTERVIEW_KNOWLEDGE_BASE_NAME = '真实面试知识库';
 
 type KnowledgeBaseWithRecords = Prisma.InterviewKnowledgeBaseGetPayload<{
   include: typeof knowledgeBaseInclude;
@@ -59,6 +62,7 @@ export class InterviewKnowledgeBasesService {
   }
 
   async findAll(userId: number, query: PaginationQueryDto) {
+    await this.consolidateSystemKnowledgeBases(userId);
     const pagination = getPagination(query);
     const [list, total] = await Promise.all([
       this.prisma.interviewKnowledgeBase.findMany({
@@ -83,8 +87,8 @@ export class InterviewKnowledgeBasesService {
     return paginatedResponse(
       list.map((item) => ({
         id: item.id,
-        name: item.name,
-        description: item.description ?? '',
+        name: this.normalizeKnowledgeBaseName(item.name),
+        description: this.normalizeKnowledgeBaseDescription(item.name, item.description),
         recordCount: item._count.records,
         focusAreas: Array.isArray(item.focusAreas) ? item.focusAreas : [],
         updatedAt: item.updatedAt.toISOString(),
@@ -130,7 +134,7 @@ export class InterviewKnowledgeBasesService {
         knowledgeBaseId,
         knowledgeBase: { userId },
       },
-      select: { id: true },
+      select: { id: true, audioUrl: true, audioFileName: true },
     });
 
     if (!record) {
@@ -140,6 +144,8 @@ export class InterviewKnowledgeBasesService {
     await this.prisma.realInterviewRecord.delete({
       where: { id: record.id },
     });
+
+    await this.deleteStoredAudioFile(userId, record);
 
     return { id: record.id, knowledgeBaseId };
   }
@@ -374,9 +380,15 @@ export class InterviewKnowledgeBasesService {
   }
 
   private async ensureAudioReviewKnowledgeBase(userId: number) {
+    await this.consolidateSystemKnowledgeBases(userId);
     const existing = await this.prisma.interviewKnowledgeBase.findFirst({
-      where: { userId },
-      orderBy: { createdAt: 'asc' },
+      where: {
+        userId,
+        name: {
+          in: [MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME, 'Mock Interview Reviews'],
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
       select: { id: true },
     });
 
@@ -387,11 +399,90 @@ export class InterviewKnowledgeBasesService {
     return this.prisma.interviewKnowledgeBase.create({
       data: {
         userId,
-        name: '面试复盘知识库',
-        description: '由模拟面试和真实面试录音复盘自动沉淀的结构化知识。',
-        focusAreas: ['真实面试复盘', '模拟面试出题', '简历优化素材'],
+        name: MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+        description: '保存模拟面试对话、录音复盘和追问训练素材。',
+        focusAreas: ['模拟面试复盘', '录音复盘', '追问训练'],
       },
       select: { id: true },
+    });
+  }
+
+  private async consolidateSystemKnowledgeBases(userId: number) {
+    const bases = await this.prisma.interviewKnowledgeBase.findMany({
+      where: {
+        userId,
+        name: {
+          in: [
+            MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+            REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
+            'Mock Interview Reviews',
+            'Audio Reviews',
+            '默认面试知识库',
+          ],
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, name: true },
+    });
+
+    await this.consolidateNamedKnowledgeBases(
+      userId,
+      bases.filter((base) =>
+        [MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME, 'Mock Interview Reviews', 'Audio Reviews'].includes(base.name),
+      ),
+      MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+      '保存模拟面试对话、录音复盘和追问训练素材。',
+      ['模拟面试复盘', '录音复盘', '追问训练'],
+    );
+    await this.consolidateNamedKnowledgeBases(
+      userId,
+      bases.filter((base) => [REAL_INTERVIEW_KNOWLEDGE_BASE_NAME, '默认面试知识库'].includes(base.name)),
+      REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
+      '用于沉淀真实面试记录、转写文本和复盘知识片段。',
+      ['真实面试复盘', '录音转写', '简历优化素材'],
+    );
+  }
+
+  private async consolidateNamedKnowledgeBases(
+    userId: number,
+    bases: Array<{ id: string; name: string }>,
+    canonicalName: string,
+    description: string,
+    focusAreas: string[],
+  ) {
+    if (bases.length === 0) {
+      return;
+    }
+
+    const target = bases.find((base) => base.name === canonicalName) ?? bases[0];
+    await this.prisma.interviewKnowledgeBase.update({
+      where: { id: target.id },
+      data: {
+        name: canonicalName,
+        description,
+        focusAreas,
+      },
+    });
+
+    const duplicateIds = bases
+      .filter((base) => base.id !== target.id)
+      .map((base) => base.id);
+    if (duplicateIds.length === 0) {
+      return;
+    }
+
+    await this.prisma.realInterviewRecord.updateMany({
+      where: {
+        knowledgeBaseId: { in: duplicateIds },
+        knowledgeBase: { userId },
+      },
+      data: { knowledgeBaseId: target.id },
+    });
+    await this.prisma.interviewKnowledgeBase.deleteMany({
+      where: {
+        userId,
+        id: { in: duplicateIds },
+      },
     });
   }
 
@@ -422,6 +513,56 @@ export class InterviewKnowledgeBasesService {
     }
 
     return `${publicBaseUrl}/audio/${encodeURIComponent(userFolder)}/${encodeURIComponent(filename)}`;
+  }
+
+  private async deleteStoredAudioFile(
+    userId: number,
+    record: { id: string; audioUrl?: string | null; audioFileName?: string | null },
+  ) {
+    const audioPath = this.resolveStoredAudioPath(userId, record);
+    if (!audioPath) {
+      return;
+    }
+
+    try {
+      await unlink(audioPath);
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ENOENT') {
+        return;
+      }
+      this.logger.warn(`删除面试录音文件失败 recordId=${record.id} path=${audioPath}`);
+    }
+  }
+
+  private resolveStoredAudioPath(
+    userId: number,
+    record: { audioUrl?: string | null; audioFileName?: string | null },
+  ) {
+    if (!record.audioUrl) {
+      return undefined;
+    }
+
+    try {
+      const url = new URL(record.audioUrl);
+      const segments = url.pathname.split('/').map((segment) => decodeURIComponent(segment));
+      const audioIndex = segments.lastIndexOf('audio');
+      const userFolder = segments[audioIndex + 1];
+      const filename = segments[audioIndex + 2];
+
+      if (
+        audioIndex < 0 ||
+        userFolder !== `user-${userId}` ||
+        !filename ||
+        filename.includes('/') ||
+        filename.includes('\\')
+      ) {
+        return undefined;
+      }
+
+      return join(this.audioRootDir, userFolder, filename);
+    } catch {
+      return undefined;
+    }
   }
 
   private getFileNameFromUrl(url?: string) {
@@ -544,8 +685,8 @@ export class InterviewKnowledgeBasesService {
   ) {
     return {
       id: knowledgeBase.id,
-      name: knowledgeBase.name,
-      description: knowledgeBase.description ?? '',
+      name: this.normalizeKnowledgeBaseName(knowledgeBase.name),
+      description: this.normalizeKnowledgeBaseDescription(knowledgeBase.name, knowledgeBase.description),
       recordCount: knowledgeBase.records.length,
       focusAreas: Array.isArray(knowledgeBase.focusAreas) ? knowledgeBase.focusAreas : [],
       updatedAt: knowledgeBase.updatedAt.toISOString(),
@@ -557,6 +698,27 @@ export class InterviewKnowledgeBasesService {
         ),
       ),
     };
+  }
+
+  private normalizeKnowledgeBaseName(name: string) {
+    if (name === 'Mock Interview Reviews' || name === 'Audio Reviews') {
+      return MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME;
+    }
+    if (name === '默认面试知识库' || name === '面试复盘知识库') {
+      return REAL_INTERVIEW_KNOWLEDGE_BASE_NAME;
+    }
+    return name;
+  }
+
+  private normalizeKnowledgeBaseDescription(name: string, description: string | null) {
+    const normalizedName = this.normalizeKnowledgeBaseName(name);
+    if (normalizedName === MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME) {
+      return '保存模拟面试对话、录音复盘和追问训练素材。';
+    }
+    if (normalizedName === REAL_INTERVIEW_KNOWLEDGE_BASE_NAME) {
+      return '用于沉淀真实面试记录、转写文本和复盘知识片段。';
+    }
+    return description ?? '';
   }
 
   private toRecordResponse(record: {

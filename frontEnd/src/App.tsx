@@ -381,7 +381,13 @@ export default function App() {
         }
       : fallbackReport;
 
-    setReports((prev) => [newReport, ...prev]);
+    setReports((prev) => [
+      newReport,
+      ...prev.filter((report) =>
+        report.id !== newReport.id &&
+        (!newReport.sessionId || report.sessionId !== newReport.sessionId),
+      ),
+    ]);
     setActiveReport(newReport);
   };
 
@@ -497,7 +503,7 @@ export default function App() {
             onDeleteResume={handleDeleteResume}
             onRenameResume={handleRenameResume}
             deliveryCount={deliveryCount}
-            interviewCount={interviewCount}
+            offerCount={offerCount}
             onLogout={handleLogout}
           />
         );

@@ -45,6 +45,19 @@ export interface InterviewQuestionPreview {
   difficultyLabel?: string;
   sourceType?: string;
   sourceLabel?: string;
+  sourceDetails?: QuestionSourceDetail[];
+}
+
+export interface QuestionSourceDetail {
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
+  recordId?: string;
+  recordTitle?: string;
+  chunkTitle?: string;
+  content?: string;
+  keywords?: string[];
+  sourceType?: string;
+  score?: number;
 }
 
 export interface InterviewSession {
@@ -138,6 +151,9 @@ export interface InterviewReport {
     correctPoints?: string[];
     wrongPoints?: string[];
     knowledgeTags?: string[];
+    sourceLabel?: string;
+    sourceType?: string;
+    sourceDetails?: QuestionSourceDetail[];
     diagnosis?: {
       content?: string;
       logic?: string;

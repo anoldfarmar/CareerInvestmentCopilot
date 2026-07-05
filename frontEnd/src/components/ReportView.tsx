@@ -538,12 +538,15 @@ function QuestionReviewCard({
   question: NonNullable<InterviewReport["questions"]>[number];
   index: number;
 }) {
+  const [showSourceDetails, setShowSourceDetails] = useState(false);
   const diagnosisItems = [
     ["内容", question.diagnosis?.content],
     ["逻辑", question.diagnosis?.logic],
     ["表达", question.diagnosis?.expression],
     ["深度", question.diagnosis?.depth],
   ].filter((item): item is [string, string] => Boolean(item[1]));
+  const sourceDetails = question.sourceDetails ?? [];
+  const primarySource = sourceDetails[0];
 
   return (
     <article className="bg-white border border-border-subtle rounded-xl p-4 shadow-sm">
@@ -555,6 +558,18 @@ function QuestionReviewCard({
           <h3 className="text-xs font-extrabold text-on-surface leading-relaxed">{question.question}</h3>
           {question.comment && (
             <p className="mt-2 text-[11px] leading-relaxed text-on-surface-variant">{question.comment}</p>
+          )}
+          {(question.sourceType === "knowledge_base" || sourceDetails.length > 0) && (
+            <button
+              type="button"
+              onClick={() => setShowSourceDetails(true)}
+              className="mt-2 inline-flex max-w-full items-center gap-1.5 rounded-lg border border-primary-container/40 bg-primary-container/10 px-2.5 py-1 text-[10px] font-extrabold text-primary active:scale-95"
+            >
+              <span className="material-symbols-outlined text-[14px]">database_search</span>
+              <span className="truncate">
+                {question.sourceLabel || `RAG 来源：${primarySource?.knowledgeBaseName ?? "面试知识库"}`}
+              </span>
+            </button>
           )}
         </div>
       </div>
@@ -603,7 +618,86 @@ function QuestionReviewCard({
           ))}
         </div>
       ) : null}
+
+      {showSourceDetails && (
+        <SourceDetailsDialog
+          title={question.sourceLabel || "RAG 来源详情"}
+          details={sourceDetails}
+          onClose={() => setShowSourceDetails(false)}
+        />
+      )}
     </article>
+  );
+}
+
+function SourceDetailsDialog({
+  title,
+  details,
+  onClose,
+}: {
+  title: string;
+  details: NonNullable<InterviewReport["questions"]>[number]["sourceDetails"];
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[80] bg-black/35 px-4 py-8 flex items-center justify-center">
+      <div className="w-full max-w-md max-h-[80vh] overflow-hidden rounded-2xl bg-white shadow-xl border border-border-subtle">
+        <div className="h-12 px-4 border-b border-border-subtle flex items-center justify-between gap-3">
+          <h3 className="min-w-0 flex-1 truncate text-sm font-extrabold text-on-surface">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-9 h-9 rounded-full flex items-center justify-center text-on-surface-variant active:bg-surface-container-low"
+            aria-label="关闭来源详情"
+          >
+            <span className="material-symbols-outlined text-[22px]">close</span>
+          </button>
+        </div>
+        <div className="max-h-[calc(80vh-3rem)] overflow-y-auto p-4 space-y-3">
+          {(details ?? []).map((detail, index) => (
+            <div key={`${detail.recordId ?? index}-${detail.chunkTitle ?? index}`} className="rounded-xl border border-border-subtle bg-surface-container-low p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-mono font-bold text-primary">
+                    {detail.knowledgeBaseName || "面试知识库"}
+                  </p>
+                  <p className="mt-1 text-xs font-extrabold text-on-surface leading-snug">
+                    {detail.recordTitle || "未命名记录"}
+                  </p>
+                  {detail.chunkTitle && (
+                    <p className="mt-1 text-[11px] text-on-surface-variant leading-snug">{detail.chunkTitle}</p>
+                  )}
+                </div>
+                {typeof detail.score === "number" && (
+                  <span className="rounded bg-white px-1.5 py-0.5 text-[9px] font-mono font-bold text-primary">
+                    {(detail.score * 100).toFixed(0)}
+                  </span>
+                )}
+              </div>
+              {detail.keywords?.length ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {detail.keywords.slice(0, 8).map((keyword) => (
+                    <span key={keyword} className="rounded bg-white px-1.5 py-0.5 text-[9px] font-mono font-bold text-on-surface-variant">
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {detail.content && (
+                <p className="mt-2 text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">
+                  {detail.content}
+                </p>
+              )}
+            </div>
+          ))}
+          {!details?.length && (
+            <div className="py-8 text-center text-xs text-on-surface-variant">
+              暂无可展示的来源详情
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

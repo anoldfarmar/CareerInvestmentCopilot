@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { cosineSimilarity, generateLocalHashEmbedding } from '../common/ai/local-embedding.util';
 import { ActivityService } from '../activity/activity.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportsService } from '../reports/reports.service';
@@ -20,6 +21,18 @@ import { InterviewRagService, type RagRecord } from './interview-rag.service';
 type InterviewQuestionDifficulty = 'easy' | 'medium' | 'hard';
 type InterviewQuestionSourceType = 'rule' | 'resume' | 'job_description' | 'knowledge_base' | 'custom';
 
+export type InterviewQuestionSourceDetail = {
+  knowledgeBaseId: string;
+  knowledgeBaseName: string;
+  recordId: string;
+  recordTitle: string;
+  chunkTitle: string;
+  content: string;
+  keywords: string[];
+  sourceType: string;
+  score: number;
+};
+
 export type InterviewQuestionPreview = {
   id: string;
   order: number;
@@ -30,6 +43,7 @@ export type InterviewQuestionPreview = {
   difficultyLabel: string;
   sourceType: InterviewQuestionSourceType;
   sourceLabel: string;
+  sourceDetails?: InterviewQuestionSourceDetail[];
   skipped?: boolean;
 };
 
@@ -45,6 +59,7 @@ type InterviewMessage = {
   difficulty?: InterviewQuestionDifficulty;
   sourceLabel?: string;
   sourceType?: InterviewQuestionSourceType;
+  sourceDetails?: InterviewQuestionSourceDetail[];
   feedbackScore?: number;
   feedbackStrengths?: string[];
   feedbackImprovements?: string[];
@@ -61,6 +76,19 @@ type ResumeInterviewContext = {
   text: string;
   focus: string;
 };
+
+const MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME = '模拟面试知识库';
+const REAL_INTERVIEW_KNOWLEDGE_BASE_NAME = '真实面试知识库';
+const MOCK_INTERVIEW_KNOWLEDGE_BASE_ALIASES = [
+  MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+  'Mock Interview Reviews',
+  'Audio Reviews',
+];
+const REAL_INTERVIEW_KNOWLEDGE_BASE_ALIASES = [
+  REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
+  '默认面试知识库',
+  '面试复盘知识库',
+];
 
 @Injectable()
 export class InterviewsService {
@@ -89,8 +117,9 @@ export class InterviewsService {
     );
 
     const resumeContext = await this.loadResumeContext(userId, data.resumeId);
-    const questions = await this.buildQuestionPlanWithAi(userId, data, resumeContext);
-    const strategySnapshot = await this.buildStrategySnapshot(userId, data, resumeContext, questions);
+    const knowledgeSnippets = await this.loadQuestionGenerationSnippets(userId, data, resumeContext);
+    const questions = await this.buildQuestionPlanWithAi(userId, data, resumeContext, knowledgeSnippets);
+    const strategySnapshot = this.buildLocalStrategySnapshot(data, resumeContext, questions);
     const firstQuestion = this.findFirstActiveQuestion(questions);
     const firstAssistantContent = await this.buildFirstAssistantContent(
       data,
@@ -134,26 +163,53 @@ export class InterviewsService {
     userId: number,
     data: CreateInterviewSessionDto,
     resumeContext?: ResumeInterviewContext,
+    preloadedKnowledgeSnippets?: InterviewKnowledgeSnippet[],
   ) {
     const fallbackQuestions = this.buildQuestionPlan(data, resumeContext);
     if (this.shouldUseFastProfessionalMode(data.interviewType)) {
-      return fallbackQuestions;
+      const knowledgeSnippets =
+        preloadedKnowledgeSnippets ??
+        await this.loadKnowledgeSnippets(
+          userId,
+          data.knowledgeBaseIds ?? [],
+          this.buildRetrievalQuery(data, resumeContext),
+          resumeContext,
+          data.jobDescription,
+        );
+      return this.attachKnowledgeSourcesToQuestions(
+        this.buildKnowledgeGroundedFallbackQuestions(fallbackQuestions, knowledgeSnippets, data),
+        knowledgeSnippets,
+      );
     }
 
     if (!this.interviewAiService) {
-      return fallbackQuestions;
+      const knowledgeSnippets =
+        preloadedKnowledgeSnippets ??
+        await this.loadKnowledgeSnippets(
+          userId,
+          data.knowledgeBaseIds ?? [],
+          this.buildRetrievalQuery(data, resumeContext),
+          resumeContext,
+          data.jobDescription,
+        );
+      return this.attachKnowledgeSourcesToQuestions(
+        this.buildKnowledgeGroundedFallbackQuestions(fallbackQuestions, knowledgeSnippets, data),
+        knowledgeSnippets,
+      );
     }
 
     try {
       const startedAt = Date.now();
       const retrievalQuery = this.buildRetrievalQuery(data, resumeContext);
-      const knowledgeSnippets = await this.loadKnowledgeSnippets(
-        userId,
-        data.knowledgeBaseIds ?? [],
-        retrievalQuery,
-        resumeContext,
-        data.jobDescription,
-      );
+      const knowledgeSnippets =
+        preloadedKnowledgeSnippets ??
+        await this.loadKnowledgeSnippets(
+          userId,
+          data.knowledgeBaseIds ?? [],
+          retrievalQuery,
+          resumeContext,
+          data.jobDescription,
+        );
       const aiQuestions = await this.interviewAiService.generateQuestionPlan({
         interviewType: data.interviewType,
         questionCount: data.questionCount,
@@ -181,13 +237,22 @@ export class InterviewsService {
       );
 
       if (aiQuestions.length === 0) {
-        return fallbackQuestions;
+        return this.attachKnowledgeSourcesToQuestions(
+          this.buildKnowledgeGroundedFallbackQuestions(fallbackQuestions, knowledgeSnippets, data),
+          knowledgeSnippets,
+        );
       }
 
-      return this.ensureQuestionCount(aiQuestions, fallbackQuestions, data.questionCount);
+      return this.attachKnowledgeSourcesToQuestions(
+        this.ensureQuestionCount(aiQuestions, fallbackQuestions, data.questionCount),
+        knowledgeSnippets,
+      );
     } catch (error) {
       this.logger.warn(`DeepSeek 面试题生成失败，已回落到规则题：${error instanceof Error ? error.message : String(error)}`);
-      return fallbackQuestions;
+      return this.attachKnowledgeSourcesToQuestions(
+        this.buildKnowledgeGroundedFallbackQuestions(fallbackQuestions, preloadedKnowledgeSnippets ?? [], data),
+        preloadedKnowledgeSnippets ?? [],
+      );
     }
   }
 
@@ -663,6 +728,7 @@ export class InterviewsService {
       difficulty: messageQuestion.difficulty,
       sourceLabel: transition.shouldAdvance ? messageQuestion.sourceLabel : 'LangGraph 专业追问',
       sourceType: messageQuestion.sourceType,
+      sourceDetails: messageQuestion.sourceDetails,
     };
   }
 
@@ -726,11 +792,12 @@ export class InterviewsService {
       return {
         ...this.createMessage('assistant', followUp.question, sessionId, question.id),
         messageType: 'follow_up',
-        dimension: question.dimension,
-        difficulty: question.difficulty,
-        sourceLabel: 'AI 追问',
-        sourceType: question.sourceType,
-      };
+      dimension: question.dimension,
+      difficulty: question.difficulty,
+      sourceLabel: 'AI 追问',
+      sourceType: question.sourceType,
+      sourceDetails: question.sourceDetails,
+    };
     } catch (error) {
       this.logger.warn(`DeepSeek 面试追问生成失败，已使用本地追问：${error instanceof Error ? error.message : String(error)}`);
       return this.createLocalFollowUpMessage(sessionId, question, answer);
@@ -751,6 +818,7 @@ export class InterviewsService {
       difficulty: question.difficulty,
       sourceLabel: '本地追问',
       sourceType: question.sourceType,
+      sourceDetails: question.sourceDetails,
     };
   }
 
@@ -784,11 +852,12 @@ export class InterviewsService {
       return {
         ...this.createMessage('assistant', content, sessionId, question.id),
         messageType: 'answer_feedback',
-        dimension: question.dimension,
-        difficulty: question.difficulty,
-        sourceLabel: 'AI 即时反馈',
-        sourceType: question.sourceType,
-        feedbackScore: feedback.score,
+      dimension: question.dimension,
+      difficulty: question.difficulty,
+      sourceLabel: 'AI 即时反馈',
+      sourceType: question.sourceType,
+      sourceDetails: question.sourceDetails,
+      feedbackScore: feedback.score,
         feedbackStrengths: feedback.strengths,
         feedbackImprovements: feedback.improvements,
       };
@@ -824,6 +893,7 @@ export class InterviewsService {
       difficulty: question.difficulty,
       sourceLabel: '本地即时反馈',
       sourceType: question.sourceType,
+      sourceDetails: question.sourceDetails,
       feedbackScore: feedback.score,
       feedbackStrengths: strengths,
       feedbackImprovements: improvements,
@@ -962,6 +1032,10 @@ export class InterviewsService {
     return interviewType === 'professional' && process.env.INTERVIEW_PROFESSIONAL_AI_MODE === 'fast';
   }
 
+  private shouldUseAiOpeningQuestion() {
+    return process.env.INTERVIEW_OPENING_AI_MODE === 'enabled';
+  }
+
   private async buildFirstAssistantContent(
     data: CreateInterviewSessionDto,
     firstQuestion: InterviewQuestionPreview | undefined,
@@ -969,7 +1043,12 @@ export class InterviewsService {
     strategySnapshot: InterviewStrategySnapshot,
   ) {
     if (!firstQuestion) return undefined;
-    if (data.interviewType !== 'professional' || !this.interviewAiService || this.shouldUseFastProfessionalMode(data.interviewType)) {
+    if (
+      data.interviewType !== 'professional' ||
+      !this.interviewAiService ||
+      this.shouldUseFastProfessionalMode(data.interviewType) ||
+      !this.shouldUseAiOpeningQuestion()
+    ) {
       return firstQuestion.content;
     }
 
@@ -1232,6 +1311,20 @@ export class InterviewsService {
       .join('\n');
   }
 
+  private async loadQuestionGenerationSnippets(
+    userId: number,
+    data: CreateInterviewSessionDto,
+    resumeContext?: ResumeInterviewContext,
+  ) {
+    return this.loadKnowledgeSnippets(
+      userId,
+      data.knowledgeBaseIds ?? [],
+      this.buildRetrievalQuery(data, resumeContext),
+      resumeContext,
+      data.jobDescription,
+    );
+  }
+
   private async loadKnowledgeSnippets(
     userId: number,
     knowledgeBaseIds: string[],
@@ -1239,13 +1332,13 @@ export class InterviewsService {
     resumeContext?: ResumeInterviewContext,
     jobDescription?: string,
   ) {
-    const uniqueIds = [...new Set(knowledgeBaseIds)].filter(Boolean);
+    const uniqueIds = await this.resolveInterviewKnowledgeBaseIds(userId, knowledgeBaseIds);
     if (uniqueIds.length === 0) {
       return [] satisfies InterviewKnowledgeSnippet[];
     }
 
     const startedAt = Date.now();
-    const records = await this.prisma.realInterviewRecord.findMany({
+    const records = (await this.prisma.realInterviewRecord.findMany({
       where: {
         knowledgeBase: {
           userId,
@@ -1262,8 +1355,14 @@ export class InterviewsService {
         transcript: true,
         structuredContent: true,
         chunks: true,
+        knowledgeBase: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
       },
-    });
+    })) ?? [];
 
     const baseRecords = records
       .filter((record) => record.transcript?.trim())
@@ -1273,6 +1372,8 @@ export class InterviewsService {
         transcript: record.transcript ?? '',
         structuredContent: record.structuredContent,
         chunks: record.chunks,
+        knowledgeBaseId: record.knowledgeBase?.id ?? '',
+        knowledgeBaseName: this.normalizeInterviewKnowledgeBaseName(record.knowledgeBase?.name ?? '面试知识库'),
       })) satisfies RagRecord[];
 
     if (!this.interviewRagService || baseRecords.length === 0) {
@@ -1302,7 +1403,6 @@ export class InterviewsService {
     });
 
     const snippets = [
-      ...baseRecords.slice(0, 4),
       {
         recordId: 'rag-retrieval',
         title: 'RAG 召回上下文',
@@ -1312,7 +1412,12 @@ export class InterviewsService {
           retrievedChunkCount: context.retrievedChunkCount,
         },
         chunks: retrievedChunks.map((chunk) => ({
+          knowledgeBaseId: chunk.knowledgeBaseId,
+          knowledgeBaseName: chunk.knowledgeBaseName,
+          recordId: chunk.recordId,
+          recordTitle: chunk.recordTitle,
           title: `${chunk.recordTitle} / ${chunk.title}`,
+          chunkTitle: chunk.title,
           content: chunk.content,
           keywords: chunk.keywords,
           sourceType: chunk.sourceType,
@@ -1333,6 +1438,177 @@ export class InterviewsService {
     );
 
     return snippets;
+  }
+
+  private async resolveInterviewKnowledgeBaseIds(userId: number, selectedKnowledgeBaseIds: string[]) {
+    const selectedIds = [...new Set(selectedKnowledgeBaseIds)].filter(Boolean);
+    const knowledgeBaseDelegate = (this.prisma as unknown as {
+      interviewKnowledgeBase?: {
+        findMany?: (args: unknown) => Promise<Array<{ id: string }>>;
+      };
+    }).interviewKnowledgeBase;
+
+    if (!knowledgeBaseDelegate?.findMany) {
+      return selectedIds;
+    }
+
+    const systemBases = await knowledgeBaseDelegate.findMany({
+      where: {
+        userId,
+        name: {
+          in: [
+            ...MOCK_INTERVIEW_KNOWLEDGE_BASE_ALIASES,
+            ...REAL_INTERVIEW_KNOWLEDGE_BASE_ALIASES,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+
+    return [...new Set([...selectedIds, ...systemBases.map((base) => base.id)])];
+  }
+
+  private buildKnowledgeGroundedFallbackQuestions(
+    questions: InterviewQuestionPreview[],
+    knowledgeSnippets: InterviewKnowledgeSnippet[],
+    data: CreateInterviewSessionDto,
+  ) {
+    const details = this.extractKnowledgeSourceDetails(knowledgeSnippets);
+    if (details.length === 0) {
+      return questions;
+    }
+
+    const jobContext = this.parseJobContext(data.jobDescription);
+    const targetRole = [jobContext.company, jobContext.position].filter(Boolean).join(' · ') || jobContext.position || '目标岗位';
+
+    return questions.map((question) => {
+      const sourceDetails = this.rankKnowledgeSourceDetails(question.content, details).slice(0, 2);
+      if (sourceDetails.length === 0) {
+        return question;
+      }
+
+      const primary = sourceDetails[0];
+      const keywords = primary.keywords.slice(0, 4).join('、') || primary.chunkTitle;
+      const content = this.normalizeQuestionContent(
+        [
+          `第 ${question.order} 题：`,
+          `你过往知识库中沉淀过「${primary.recordTitle}」里的「${primary.chunkTitle}」相关经验。`,
+          jobContext.hasJobDescription
+            ? `结合${targetRole}的岗位要求，请说明你会如何把这段经验迁移到当前岗位场景中。`
+            : '请结合这段经验说明你的方法、判断依据和可复用结论。',
+          `回答时请覆盖：${keywords}、你的具体动作、验证指标和风险边界。`,
+        ].join(''),
+      );
+
+      return {
+        ...question,
+        content,
+        sourceType: 'knowledge_base' as const,
+        sourceLabel: `RAG 命中：${primary.knowledgeBaseName} / ${primary.recordTitle}`,
+        sourceDetails,
+      };
+    });
+  }
+
+  private attachKnowledgeSourcesToQuestions(
+    questions: InterviewQuestionPreview[],
+    knowledgeSnippets: InterviewKnowledgeSnippet[],
+  ) {
+    const details = this.extractKnowledgeSourceDetails(knowledgeSnippets);
+    if (details.length === 0) {
+      return questions;
+    }
+
+    return questions.map((question) => {
+      if (question.sourceType !== 'knowledge_base') {
+        return question;
+      }
+
+      const sourceDetails = question.sourceDetails?.length
+        ? question.sourceDetails
+        : this.rankKnowledgeSourceDetails(question.content, details).slice(0, 3);
+      const primary = sourceDetails[0];
+
+      return {
+        ...question,
+        sourceLabel: primary
+          ? `RAG 命中：${primary.knowledgeBaseName} / ${primary.recordTitle}`
+          : question.sourceLabel,
+        sourceDetails,
+      };
+    });
+  }
+
+  private extractKnowledgeSourceDetails(
+    knowledgeSnippets: InterviewKnowledgeSnippet[],
+  ): InterviewQuestionSourceDetail[] {
+    return knowledgeSnippets.flatMap((snippet) => {
+      if (!Array.isArray(snippet.chunks)) {
+        return [] as InterviewQuestionSourceDetail[];
+      }
+
+      return snippet.chunks
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+        .map((chunk) => ({
+          knowledgeBaseId: this.toOptionalString(chunk.knowledgeBaseId) ?? '',
+          knowledgeBaseName: this.normalizeInterviewKnowledgeBaseName(
+            this.toOptionalString(chunk.knowledgeBaseName) ?? '面试知识库',
+          ),
+          recordId: this.toOptionalString(chunk.recordId) ?? snippet.recordId,
+          recordTitle: this.toOptionalString(chunk.recordTitle) ?? snippet.title,
+          chunkTitle: this.toOptionalString(chunk.chunkTitle) ?? this.toOptionalString(chunk.title) ?? '知识片段',
+          content: this.toOptionalString(chunk.content) ?? '',
+          keywords: this.toStringArray(chunk.keywords),
+          sourceType: this.toOptionalString(chunk.sourceType) ?? 'chunk',
+          score: this.toNumber(chunk.score, 0),
+        }))
+        .filter((detail) => detail.content.trim());
+    });
+  }
+
+  private rankKnowledgeSourceDetails(question: string, details: InterviewQuestionSourceDetail[]) {
+    const questionEmbedding = generateLocalHashEmbedding(question);
+    return [...details]
+      .map((detail) => ({
+        ...detail,
+        score: Math.max(
+          detail.score,
+          cosineSimilarity(
+            questionEmbedding,
+            generateLocalHashEmbedding([
+              detail.knowledgeBaseName,
+              detail.recordTitle,
+              detail.chunkTitle,
+              detail.keywords.join(' '),
+              detail.content,
+            ].filter(Boolean).join('\n')),
+          ),
+        ),
+      }))
+      .sort((left, right) => right.score - left.score);
+  }
+
+  private normalizeInterviewKnowledgeBaseName(name: string) {
+    if (MOCK_INTERVIEW_KNOWLEDGE_BASE_ALIASES.includes(name)) {
+      return MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME;
+    }
+    if (REAL_INTERVIEW_KNOWLEDGE_BASE_ALIASES.includes(name)) {
+      return REAL_INTERVIEW_KNOWLEDGE_BASE_NAME;
+    }
+    return name;
+  }
+
+  private toOptionalString(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private toStringArray(value: unknown) {
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  }
+
+  private toNumber(value: unknown, fallback: number) {
+    const numberValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : fallback;
   }
 
   private async findOwnedSession(userId: number, sessionId: string) {
@@ -1520,6 +1796,7 @@ export class InterviewsService {
       difficulty: question.difficulty,
       sourceLabel: question.sourceLabel,
       sourceType: question.sourceType,
+      sourceDetails: question.sourceDetails,
     };
   }
 

@@ -59,9 +59,9 @@ export class AuthService {
       await tx.interviewKnowledgeBase.create({
         data: {
           userId: createdUser.id,
-          name: '默认面试知识库',
+          name: '真实面试知识库',
           description: '用于沉淀真实面试录音、转写文本和复盘知识片段。',
-          focusAreas: ['真实面试复盘', '模拟面试出题', '简历优化素材'],
+          focusAreas: ['真实面试复盘', '录音转写', '简历优化素材'],
         },
       });
 

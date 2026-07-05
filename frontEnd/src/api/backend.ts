@@ -149,6 +149,15 @@ export interface BackendKnowledgeBase {
   };
 }
 
+const MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME = "模拟面试知识库";
+const REAL_INTERVIEW_KNOWLEDGE_BASE_NAME = "真实面试知识库";
+const legacyKnowledgeBaseNames: Record<string, string> = {
+  "Mock Interview Reviews": MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+  "Audio Reviews": MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+  "默认面试知识库": REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
+  "面试复盘知识库": REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
+};
+
 export interface BackendProfile {
   name: string;
   jobMode: string;
@@ -307,14 +316,20 @@ export const backendApi = {
     apiRequest<BackendProfile>("/profile", {
       method: "DELETE",
     }),
-  knowledgeBases: () => apiRequest<Paginated<BackendKnowledgeBase>>("/interview-knowledge-bases?page=1&pageSize=20"),
+  knowledgeBases: async () => {
+    const response = await apiRequest<Paginated<BackendKnowledgeBase>>("/interview-knowledge-bases?page=1&pageSize=20");
+    return {
+      ...response,
+      items: response.items.map(normalizeKnowledgeBaseDisplay),
+    };
+  },
   createKnowledgeBase: (input: { name: string; description?: string; focusAreas?: string[] }) =>
     apiRequest<BackendKnowledgeBase>("/interview-knowledge-bases", {
       method: "POST",
       body: toKnowledgeBaseBody(input),
     }),
-  knowledgeBase: (id: string) =>
-    apiRequest<BackendKnowledgeBase>(`/interview-knowledge-bases/${id}`),
+  knowledgeBase: async (id: string) =>
+    normalizeKnowledgeBaseDisplay(await apiRequest<BackendKnowledgeBase>(`/interview-knowledge-bases/${id}`)),
   deleteKnowledgeBase: (id: string) =>
     apiRequest<{ id: string }>(`/interview-knowledge-bases/${id}`, {
       method: "DELETE",
@@ -558,6 +573,22 @@ function toProfileBody(input: Partial<BackendProfile>) {
   };
 }
 
+function normalizeKnowledgeBaseDisplay(base: BackendKnowledgeBase): BackendKnowledgeBase {
+  const normalizedName = legacyKnowledgeBaseNames[base.name] ?? base.name;
+  const normalizedDescription =
+    normalizedName === MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME
+      ? "保存模拟面试对话、录音复盘和追问训练素材。"
+      : normalizedName === REAL_INTERVIEW_KNOWLEDGE_BASE_NAME
+        ? "用于沉淀真实面试记录、转写文本和复盘知识片段。"
+        : base.description;
+
+  return {
+    ...base,
+    name: normalizedName,
+    description: normalizedDescription,
+  };
+}
+
 function toKnowledgeBaseBody(input: { name: string; description?: string; focusAreas?: string[] }) {
   return {
     name: input.name.trim(),
@@ -644,9 +675,10 @@ async function saveInterviewReviewToKnowledgeBase(input: {
   transcript: string;
 }) {
   const knowledgeBase = await ensureNamedKnowledgeBase({
-    name: "Mock Interview Reviews",
-    description: "Saved mock interview transcripts and review reports",
-    focusAreas: ["mock-interview", "review", "follow-up"],
+    name: MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+    aliases: ["Mock Interview Reviews"],
+    description: "保存模拟面试对话、复盘报告和追问训练素材。",
+    focusAreas: ["模拟面试复盘", "追问训练", "答题改进"],
   });
   const record = await backendApi.createManualKnowledgeRecord(knowledgeBase.id, input);
   void backendApi.buildKnowledgeRecord(knowledgeBase.id, record.id).catch(() => undefined);
@@ -655,17 +687,24 @@ async function saveInterviewReviewToKnowledgeBase(input: {
 
 async function ensureAudioReviewKnowledgeBase() {
   return ensureNamedKnowledgeBase({
-    name: "Audio Reviews",
-    description: "Uploaded interview audio reviews",
-    focusAreas: ["interview", "review"],
+    name: MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
+    aliases: ["Mock Interview Reviews"],
+    description: "保存模拟面试对话、复盘报告和追问训练素材。",
+    focusAreas: ["模拟面试复盘", "录音复盘", "追问训练"],
   });
 }
 
-async function ensureNamedKnowledgeBase(input: { name: string; description: string; focusAreas: string[] }) {
+async function ensureNamedKnowledgeBase(input: {
+  name: string;
+  aliases?: string[];
+  description: string;
+  focusAreas: string[];
+}) {
   const list = await apiRequest<Paginated<BackendKnowledgeBase>>(
     "/interview-knowledge-bases?page=1&pageSize=50",
   );
-  const existing = list.items.find((item) => item.name === input.name);
+  const names = new Set([input.name, ...(input.aliases ?? [])]);
+  const existing = list.items.find((item) => names.has(item.name));
 
   if (existing) {
     return existing;
@@ -1064,6 +1103,9 @@ function toQuestionReviews(value: unknown): NonNullable<InterviewReport["questio
       correctPoints: toStringArray(source.correctPoints, []),
       wrongPoints: toStringArray(source.wrongPoints, []),
       knowledgeTags: toStringArray(source.knowledgeTags, []),
+      sourceLabel: "sourceLabel" in source ? String(source.sourceLabel) : undefined,
+      sourceType: "sourceType" in source ? String(source.sourceType) : undefined,
+      sourceDetails: toQuestionSourceDetails(source.sourceDetails),
       diagnosis: {
         content: "content" in diagnosis ? String(diagnosis.content) : undefined,
         logic: "logic" in diagnosis ? String(diagnosis.logic) : undefined,
@@ -1079,6 +1121,27 @@ function toQuestionReviews(value: unknown): NonNullable<InterviewReport["questio
       qaTranscript: toQaTranscript(source.qaTranscript),
     };
   });
+}
+
+function toQuestionSourceDetails(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const source = isRecord(item) ? item : {};
+      const score = "score" in source ? Number(source.score) : undefined;
+      return {
+        knowledgeBaseId: "knowledgeBaseId" in source ? String(source.knowledgeBaseId) : undefined,
+        knowledgeBaseName: "knowledgeBaseName" in source ? String(source.knowledgeBaseName) : undefined,
+        recordId: "recordId" in source ? String(source.recordId) : undefined,
+        recordTitle: "recordTitle" in source ? String(source.recordTitle) : undefined,
+        chunkTitle: "chunkTitle" in source ? String(source.chunkTitle) : undefined,
+        content: "content" in source ? String(source.content) : undefined,
+        keywords: toStringArray(source.keywords, []),
+        sourceType: "sourceType" in source ? String(source.sourceType) : undefined,
+        score: Number.isFinite(score) ? score : undefined,
+      };
+    })
+    .filter((item) => item.content || item.recordTitle || item.chunkTitle);
 }
 
 function toQaTranscript(value: unknown) {

@@ -9,7 +9,7 @@ interface ProfileViewProps {
   onDeleteResume: (id: string) => Promise<void>;
   onRenameResume: (id: string, title: string) => Promise<unknown>;
   deliveryCount: number;
-  interviewCount: number;
+  offerCount: number;
   onLogout: () => void;
 }
 
@@ -73,10 +73,11 @@ export default function ProfileView({
   onDeleteResume,
   onRenameResume,
   deliveryCount,
-  interviewCount,
+  offerCount,
   onLogout,
 }: ProfileViewProps) {
   const [profile, setProfile] = useState<BackendProfile>(defaultProfile);
+  const [knowledgeImportCount, setKnowledgeImportCount] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
   const [draftProfile, setDraftProfile] = useState<BackendProfile>(defaultProfile);
   const [isProfileLoading, setIsProfileLoading] = useState(true);
@@ -93,16 +94,12 @@ export default function ProfileView({
   const [isRenaming, setIsRenaming] = useState(false);
   const touchStartX = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const averageWellness =
-    resumes.length === 0
-      ? 0
-      : Math.round(resumes.reduce((sum, resume) => sum + resume.wellness, 0) / resumes.length);
-  const keywordTotal = resumes.reduce((sum, resume) => sum + resume.keywordCount, 0);
   const displayName = profile.name || "未设置姓名";
   const displayTitle = buildProfileTitle(profile);
 
   useEffect(() => {
     void loadProfile();
+    void loadKnowledgeImportCount();
   }, []);
 
   useEffect(() => {
@@ -125,6 +122,19 @@ export default function ProfileView({
       setProfileError(error instanceof Error ? error.message : "个人资料加载失败");
     } finally {
       setIsProfileLoading(false);
+    }
+  };
+
+  const loadKnowledgeImportCount = async () => {
+    try {
+      const response = await backendApi.knowledgeBases();
+      const total = response.items.reduce(
+        (sum, base) => sum + (base.recordCount ?? base.records?.length ?? 0),
+        0,
+      );
+      setKnowledgeImportCount(total);
+    } catch {
+      setKnowledgeImportCount(0);
     }
   };
 
@@ -600,21 +610,21 @@ export default function ProfileView({
             {/* Resume Metas Grid */}
             <div className="grid grid-cols-3 w-full mt-6 border-t border-dashed border-border-subtle pt-5 text-center">
               <div>
-                <p className="font-sans text-xl font-bold text-primary">{deliveryCount}</p>
+                <p className="font-sans text-xl font-bold text-primary">{knowledgeImportCount}</p>
                 <p className="font-mono text-[9px] font-semibold text-on-surface-variant tracking-wider uppercase mt-0.5">
-                  投递记录
+                  知识库导入
                 </p>
               </div>
               <div className="border-x border-border-subtle">
-                <p className="font-sans text-xl font-bold text-primary">0</p>
+                <p className="font-sans text-xl font-bold text-primary">{deliveryCount}</p>
                 <p className="font-mono text-[9px] font-semibold text-on-surface-variant tracking-wider uppercase mt-0.5">
-                  匹配评分
+                  已投简历
                 </p>
               </div>
               <div>
-                <p className="font-sans text-xl font-bold text-primary">{interviewCount}</p>
+                <p className="font-sans text-xl font-bold text-primary">{offerCount}</p>
                 <p className="font-mono text-[9px] font-semibold text-on-surface-variant tracking-wider uppercase mt-0.5">
-                  面试邀约
+                  Offer
                 </p>
               </div>
             </div>
@@ -766,39 +776,6 @@ export default function ProfileView({
           </div>
         </section>
 
-        {/* Assets Data Statistics */}
-        <section id="assets-analytics-visuals" className="space-y-3">
-          <h3 className="font-mono text-xs font-bold text-on-surface-variant uppercase tracking-wider">
-            资产分析 (Data Assets)
-          </h3>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-white p-4 rounded-xl border border-border-subtle">
-              <p className="font-mono text-[10px] text-on-surface-variant mb-1 font-semibold">
-                简历健康度
-              </p>
-              <div className="flex items-end gap-1">
-                <span className="font-sans text-xl font-bold text-primary">{averageWellness}</span>
-                <span className="font-mono text-[10px] text-on-surface-variant mb-1">%</span>
-              </div>
-              <div className="w-full bg-zinc-100 h-1 rounded-full mt-2 overflow-hidden">
-                <div className="bg-primary-container h-full rounded-full" style={{ width: `${averageWellness}%` }}></div>
-              </div>
-            </div>
-
-            <div className="bg-white p-4 rounded-xl border border-border-subtle">
-              <p className="font-mono text-[10px] text-on-surface-variant mb-1 font-semibold">
-                关键词覆盖
-              </p>
-              <div className="flex items-end gap-1">
-                <span className="font-sans text-xl font-bold text-secondary">{keywordTotal}</span>
-                <span className="font-mono text-[10px] text-on-surface-variant mb-1">UNIT</span>
-              </div>
-              <div className="w-full bg-zinc-100 h-1 rounded-full mt-2 overflow-hidden">
-                <div className="bg-secondary-container h-full rounded-full" style={{ width: `${Math.min(keywordTotal, 100)}%` }}></div>
-              </div>
-            </div>
-          </div>
-        </section>
       </main>
 
       {pdfPreview && (

@@ -16,6 +16,20 @@ type InterviewMessage = {
   dimension?: string;
   difficulty?: string;
   sourceLabel?: string;
+  sourceType?: string;
+  sourceDetails?: QuestionSourceDetail[];
+};
+
+type QuestionSourceDetail = {
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
+  recordId?: string;
+  recordTitle?: string;
+  chunkTitle?: string;
+  content?: string;
+  keywords?: string[];
+  sourceType?: string;
+  score?: number;
 };
 
 type InterviewQuestionPreview = {
@@ -26,6 +40,8 @@ type InterviewQuestionPreview = {
   dimensionLabel?: string;
   difficulty?: string;
   sourceLabel?: string;
+  sourceType?: string;
+  sourceDetails?: QuestionSourceDetail[];
   skipped?: boolean;
 };
 
@@ -35,6 +51,8 @@ type QuestionThread = {
   dimension?: string;
   difficulty?: string;
   sourceLabel?: string;
+  sourceType?: string;
+  sourceDetails?: QuestionSourceDetail[];
   answers: string[];
   followUps: string[];
   transcript: Array<{ role: 'assistant' | 'user'; content: string }>;
@@ -64,6 +82,9 @@ type QuestionReview = {
   correctPoints?: string[];
   wrongPoints?: string[];
   knowledgeTags?: string[];
+  sourceLabel?: string;
+  sourceType?: string;
+  sourceDetails?: QuestionSourceDetail[];
   qaTranscript?: Array<{ role: 'assistant' | 'user'; content: string }>;
 };
 
@@ -122,6 +143,7 @@ export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
   private readonly baseUrl = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com';
   private readonly model = process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-pro';
+  private readonly reportAiTimeoutMs = Number(process.env.REPORT_AI_TIMEOUT_MS ?? 12000);
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -225,7 +247,11 @@ export class ReportsService {
     finalEvaluation?: Record<string, unknown>,
   ) {
     try {
-      const aiReport = await this.generateAiReport(type, totalQuestions, threads, strategySnapshot, finalEvaluation);
+      const aiReport = await this.withTimeout(
+        this.generateAiReport(type, totalQuestions, threads, strategySnapshot, finalEvaluation),
+        this.reportAiTimeoutMs,
+        'AI 复盘报告生成超时',
+      );
       return {
         title: `${this.typeLabel(type)}复盘报告`,
         generatedBy: 'ai',
@@ -243,6 +269,26 @@ export class ReportsService {
     } catch (error) {
       this.logger.warn(`DeepSeek 复盘报告生成失败，已使用本地规则报告：${error instanceof Error ? error.message : String(error)}`);
       return this.buildLocalReport(type, totalQuestions, threads, strategySnapshot, finalEvaluation);
+    }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return promise;
+    }
+
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
     }
   }
 
@@ -285,6 +331,9 @@ export class ReportsService {
                 question: thread.question,
                 dimension: thread.dimension,
                 difficulty: thread.difficulty,
+                sourceLabel: thread.sourceLabel,
+                sourceType: thread.sourceType,
+                sourceDetails: thread.sourceDetails,
                 answers: thread.answers,
                 followUps: thread.followUps,
                 transcript: thread.transcript,
@@ -320,7 +369,7 @@ export class ReportsService {
       '请额外总结候选人的优势打法、短板修复路线，以及候选人是否成功把面试官自然引导到自己的强项。',
       '有效引导必须与当前题目、简历证据或目标 JD 有关；如果候选人只是逃避问题，请在 failedSteering 中指出。',
       '严格返回 JSON object，不要 Markdown，不要解释。',
-      'JSON 格式：{"score":1-100,"level":"优秀|良好|待提升|需要补强","summary":"整体总结","dimensions":[{"label":"内容完整度","score":1-100}],"questions":[{"id":"q-1","question":"题目","answer":"用户回答汇总","comment":"总体点评","correctPoints":["答得好的地方"],"wrongPoints":["错误或缺失"],"issues":["短标签"],"advice":"下次怎么改","referenceAnswer":"参考表达","diagnosis":{"content":"内容诊断","logic":"逻辑诊断","expression":"表达诊断","depth":"深度诊断"},"improvement":{"summary":"改进摘要","example":"可直接照着练的示例","nextTry":"下一次练习要求"},"practiceResources":["练习建议"],"knowledgeTags":["知识库标签"],"steeringAdvice":"这题如何自然引导到强项","qaTranscript":[{"role":"assistant","content":"问题或追问"},{"role":"user","content":"回答"}]}],"nextActions":["下一步行动"],"topDirections":[{"title":"方向","reason":"原因","actions":["动作"]}],"advantageSummary":[{"advantage":"优势","evidence":["证据"],"howToAmplify":"如何放大","steeringExamples":["真实面试话术"],"risk":"讲不好会产生的风险"}],"weaknessSummary":[{"weakness":"短板","observedIn":["出现在哪些题"],"whyItMatters":"为什么影响岗位匹配","repairPlan":["修复动作"]}],"interviewerSteeringReview":{"successfulSteering":["有效引导片段"],"failedSteering":["逃避或生硬转移片段"],"nextTimeTactics":["下次策略"]}}',
+      'JSON 格式：{"score":1-100,"level":"优秀|良好|待提升|需要补强","summary":"整体总结","dimensions":[{"label":"内容完整度","score":1-100}],"questions":[{"id":"q-1","question":"题目","answer":"用户回答汇总","comment":"总体点评","correctPoints":["答得好的地方"],"wrongPoints":["错误或缺失"],"issues":["短标签"],"advice":"下次怎么改","referenceAnswer":"参考表达","diagnosis":{"content":"内容诊断","logic":"逻辑诊断","expression":"表达诊断","depth":"深度诊断"},"improvement":{"summary":"改进摘要","example":"可直接照着练的示例","nextTry":"下一次练习要求"},"practiceResources":["练习建议"],"knowledgeTags":["知识库标签"],"sourceLabel":"若题目来自知识库则保留来源标签","sourceType":"rule|resume|job_description|knowledge_base","sourceDetails":[{"knowledgeBaseName":"知识库名","recordTitle":"记录标题","chunkTitle":"片段标题","content":"来源片段摘要","keywords":["关键词"],"score":0.8}],"steeringAdvice":"这题如何自然引导到强项","qaTranscript":[{"role":"assistant","content":"问题或追问"},{"role":"user","content":"回答"}]}],"nextActions":["下一步行动"],"topDirections":[{"title":"方向","reason":"原因","actions":["动作"]}],"advantageSummary":[{"advantage":"优势","evidence":["证据"],"howToAmplify":"如何放大","steeringExamples":["真实面试话术"],"risk":"讲不好会产生的风险"}],"weaknessSummary":[{"weakness":"短板","observedIn":["出现在哪些题"],"whyItMatters":"为什么影响岗位匹配","repairPlan":["修复动作"]}],"interviewerSteeringReview":{"successfulSteering":["有效引导片段"],"failedSteering":["逃避或生硬转移片段"],"nextTimeTactics":["下次策略"]}}',
     ].join('\n');
   }
 
@@ -364,6 +413,8 @@ export class ReportsService {
           dimension: question.dimension,
           difficulty: question.difficulty,
           sourceLabel: question.sourceLabel,
+          sourceType: question.sourceType,
+          sourceDetails: this.normalizeSourceDetails(question.sourceDetails, []),
           answers: [],
           followUps: [],
           transcript: [],
@@ -422,6 +473,8 @@ export class ReportsService {
       dimension: message.dimension,
       difficulty: message.difficulty,
       sourceLabel: message.sourceLabel,
+      sourceType: message.sourceType,
+      sourceDetails: this.normalizeSourceDetails(message.sourceDetails, []),
       answers: [],
       followUps: [],
       transcript: [],
@@ -455,6 +508,9 @@ export class ReportsService {
       practiceResources: this.buildPracticeResources(thread, issues),
       steeringAdvice: this.buildSteeringAdvice(thread, answer, issues),
       knowledgeTags: this.buildKnowledgeTags(thread, issues),
+      sourceLabel: thread.sourceLabel,
+      sourceType: thread.sourceType,
+      sourceDetails: thread.sourceDetails ?? [],
       qaTranscript: thread.transcript,
     };
   }
@@ -754,6 +810,9 @@ export class ReportsService {
         wrongPoints: this.normalizeStringArray(item.wrongPoints, fallback.wrongPoints ?? []),
         practiceResources: this.normalizeStringArray(item.practiceResources, fallback.practiceResources),
         knowledgeTags: this.normalizeStringArray(item.knowledgeTags, fallback.knowledgeTags ?? []),
+        sourceLabel: item.sourceLabel ?? fallback.sourceLabel,
+        sourceType: item.sourceType ?? fallback.sourceType,
+        sourceDetails: this.normalizeSourceDetails(item.sourceDetails, fallback.sourceDetails ?? []),
         steeringAdvice: item.steeringAdvice ?? fallback.steeringAdvice,
         diagnosis: { ...fallback.diagnosis, ...(item.diagnosis ?? {}) },
         improvement: { ...fallback.improvement, ...(item.improvement ?? {}) },
@@ -864,6 +923,27 @@ export class ReportsService {
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : fallback;
   }
 
+  private normalizeSourceDetails(value: unknown, fallback: QuestionSourceDetail[]) {
+    if (!Array.isArray(value)) {
+      return fallback;
+    }
+
+    return value
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      .map((item) => ({
+        knowledgeBaseId: this.toOptionalText(item.knowledgeBaseId),
+        knowledgeBaseName: this.toOptionalText(item.knowledgeBaseName),
+        recordId: this.toOptionalText(item.recordId),
+        recordTitle: this.toOptionalText(item.recordTitle),
+        chunkTitle: this.toOptionalText(item.chunkTitle),
+        content: this.toOptionalText(item.content),
+        keywords: this.normalizeStringArray(item.keywords, []),
+        sourceType: this.toOptionalText(item.sourceType),
+        score: this.toNumber(item.score),
+      }))
+      .filter((item) => item.content || item.recordTitle || item.chunkTitle);
+  }
+
   private readArrayObjects(value: unknown): Array<Record<string, unknown>> {
     return Array.isArray(value)
       ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
@@ -878,6 +958,15 @@ export class ReportsService {
 
   private toText(value: unknown, fallback: string) {
     return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  }
+
+  private toOptionalText(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private toNumber(value: unknown) {
+    const numberValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : undefined;
   }
 
   private parseJsonObject(content: string): Record<string, unknown> {

@@ -253,8 +253,7 @@ export default function MockInterviewView({
     setErrorMessage("");
     try {
       const nextSession = await backendApi.skipInterviewQuestion(currentSession.sessionId, currentQuestion.id);
-      const movedSession = nextSession.ended ? nextSession : await backendApi.nextInterviewQuestion(nextSession.sessionId);
-      syncSessionToChat(movedSession);
+      syncSessionToChat(nextSession);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "跳过题目失败，请稍后重试。");
     } finally {
@@ -321,13 +320,23 @@ export default function MockInterviewView({
     setIsTyping(true);
     setErrorMessage("");
     try {
-      let generatedReport: BackendReport | undefined;
-      if (currentSession?.sessionId) {
-        await backendApi.endInterviewSession(currentSession.sessionId);
-        generatedReport = await backendApi.generateInterviewReport(currentSession.sessionId);
+      const sessionId = currentSession?.sessionId;
+      if (sessionId) {
+        await backendApi.endInterviewSession(sessionId);
       }
-      onCompleteInterview(finalScore, transcripts, generatedReport);
+
+      onCompleteInterview(finalScore, transcripts);
       onNavigate("feedback");
+
+      if (sessionId) {
+        void backendApi.generateInterviewReport(sessionId)
+          .then((generatedReport) => {
+            onCompleteInterview(finalScore, transcripts, generatedReport);
+          })
+          .catch((error) => {
+            console.warn("Background interview report generation failed.", error);
+          });
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "结束面试或生成报告失败，请稍后重试。");
     } finally {

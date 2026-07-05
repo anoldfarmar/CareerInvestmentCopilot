@@ -6,6 +6,7 @@
     "dist",
     "**/*spec.ts",
     "exp-*",
+    "temp-interview",
     "frontend",
     "backend",
     "docs"

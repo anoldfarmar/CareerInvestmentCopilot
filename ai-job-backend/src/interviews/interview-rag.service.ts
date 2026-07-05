@@ -3,6 +3,8 @@ import { cosineSimilarity, generateLocalHashEmbedding } from '../common/ai/local
 
 export type RagRecord = {
   recordId: string;
+  knowledgeBaseId?: string;
+  knowledgeBaseName?: string;
   title: string;
   transcript: string;
   structuredContent?: unknown;
@@ -11,6 +13,8 @@ export type RagRecord = {
 
 export type RetrievedInterviewChunk = {
   recordId: string;
+  knowledgeBaseId: string;
+  knowledgeBaseName: string;
   recordTitle: string;
   title: string;
   content: string;
@@ -46,6 +50,8 @@ export class InterviewRagService {
 
         return {
           recordId: record.recordId,
+          knowledgeBaseId: record.knowledgeBaseId ?? '',
+          knowledgeBaseName: record.knowledgeBaseName ?? '面试知识库',
           recordTitle: record.title,
           title: chunk.title?.trim() || `片段 ${index + 1}`,
           content,
@@ -61,6 +67,8 @@ export class InterviewRagService {
         .filter((record) => record.transcript.trim())
         .map((record) => ({
           recordId: record.recordId,
+          knowledgeBaseId: record.knowledgeBaseId ?? '',
+          knowledgeBaseName: record.knowledgeBaseName ?? '面试知识库',
           recordTitle: record.title,
           title: record.title,
           content: record.transcript.slice(0, 700),

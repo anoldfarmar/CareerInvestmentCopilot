@@ -99,8 +99,26 @@ export default function AudioReviewView({
   };
 
   const handleStartReview = async () => {
-    if (!selectedAudioFile || isProcessing) return;
+    if (!selectedAudioFile || isProcessing || isReviewStored) return;
     await uploadAndProcessAudio(selectedAudioFile);
+  };
+
+  const handleFooterAction = async () => {
+    if (isReviewStored) {
+      handleStartAnotherReview();
+      return;
+    }
+    await handleStartReview();
+  };
+
+  const handleStartAnotherReview = () => {
+    setSelectedAudioName("");
+    setSelectedAudioFile(null);
+    setUploadProgress(0);
+    setProcessMessage("");
+    setProcessError("");
+    setReviewRecord(null);
+    fileInputRef.current?.click();
   };
 
   return (
@@ -270,7 +288,7 @@ export default function AudioReviewView({
                 {statusLabel(reviewRecord.buildStatus)}
               </span>
             </div>
-            <AudioReviewResult record={reviewRecord} />
+            <AudioReviewResult record={reviewRecord} onStartAnotherReview={handleStartAnotherReview} />
           </section>
         )}
       </main>
@@ -278,25 +296,31 @@ export default function AudioReviewView({
       <footer className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-background/95 backdrop-blur border-t border-border-subtle px-4 pt-3 pb-safe z-50">
         <button
           type="button"
-          onClick={handleStartReview}
-          disabled={!selectedAudioFile || isProcessing}
+          onClick={handleFooterAction}
+          disabled={isProcessing || (!selectedAudioFile && !isReviewStored)}
           className={`w-full h-14 rounded-xl font-sans text-base font-extrabold flex items-center justify-center gap-2 shadow-md shadow-primary/10 transition-all ${
-            selectedAudioFile && !isProcessing
+            (selectedAudioFile && !isProcessing && !isReviewStored) || (isReviewStored && !isProcessing)
               ? "bg-primary text-white active:scale-95"
               : "bg-primary text-white opacity-70 cursor-not-allowed"
           }`}
         >
           <span className={`material-symbols-outlined text-[20px] ${isProcessing ? "animate-spin" : ""}`}>
-            {isProcessing ? "progress_activity" : isReviewStored ? "library_add_check" : "rocket_launch"}
+            {isProcessing ? "progress_activity" : isReviewStored ? "add_circle" : "rocket_launch"}
           </span>
-          {isProcessing ? "正在复盘解析" : isReviewStored ? "复盘已存入知识库" : "开始复盘解析"}
+          {isProcessing ? "正在复盘解析" : isReviewStored ? "再存一段" : "开始复盘解析"}
         </button>
       </footer>
     </div>
   );
 }
 
-export function AudioReviewResult({ record }: { record: BackendKnowledgeRecord }) {
+export function AudioReviewResult({
+  record,
+  onStartAnotherReview,
+}: {
+  record: BackendKnowledgeRecord;
+  onStartAnotherReview?: () => void;
+}) {
   const structured = normalizeStructuredContent(record.structuredContent);
   const chunks = normalizeChunks(record.chunks);
   const transcript = record.roleTranscript || record.speakerTranscript || record.transcript || "";
@@ -428,9 +452,19 @@ export function AudioReviewResult({ record }: { record: BackendKnowledgeRecord }
       </ResultBlock>
 
       {record.transcribedAt && (
-        <p className="text-center text-[10px] font-mono text-outline">
-          已于 {formatDateTime(record.transcribedAt)} 写入数据库 RealInterviewRecord
-        </p>
+        <div className="flex items-center justify-center gap-3 text-[10px] font-mono text-outline">
+          <span>已于 {formatDateTime(record.transcribedAt)} 写入数据库 RealInterviewRecord</span>
+          {onStartAnotherReview && (
+            <button
+              type="button"
+              onClick={onStartAnotherReview}
+              className="inline-flex items-center gap-1 rounded-full border border-primary-container/40 bg-white px-2.5 py-1 font-sans text-[10px] font-bold text-primary active:scale-95"
+            >
+              <span className="material-symbols-outlined text-[13px]">add</span>
+              再存一段
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
