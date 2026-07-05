@@ -306,6 +306,7 @@ export class InterviewGraphService {
     const consecutiveNodeTurns = this.countConsecutiveNodeTurns(state);
     const hasNewFacts = this.hasNewListenerFacts(state);
     const hasDriftRisk = Boolean(state.listenerOutput?.riskSignals.some((signal) => /跑偏|回避|无关/.test(signal)));
+    const isComprehensiveAnswer = this.isComprehensiveAnswer(state);
 
     if (turnCount >= 12 && decision.action !== 'wrap_up') {
       return this.overrideDecision(state, decision, 'wrap_up', '核心轮次已覆盖，进入收尾或反问环节。');
@@ -313,6 +314,15 @@ export class InterviewGraphService {
 
     if (hasDriftRisk && decision.action !== 'guide_back') {
       return this.overrideDecision(state, decision, 'guide_back', '检测到跑偏或回避风险，优先拉回当前问题。');
+    }
+
+    if (
+      isComprehensiveAnswer &&
+      consecutiveNodeTurns >= 1 &&
+      decision.action !== 'switch_topic' &&
+      decision.action !== 'wrap_up'
+    ) {
+      return this.overrideDecision(state, decision, 'switch_topic', '候选人已给出较完整答案，按主问题覆盖优先规则进入下一题。');
     }
 
     if (
@@ -371,7 +381,7 @@ export class InterviewGraphService {
 
   private speakerInstructionForAction(action: InterviewGraphAction, fallback: string) {
     if (action === 'switch_topic') {
-      return '请自然切换到另一个与 JD 相关的能力点，保持真实面试官口吻，只问一个问题。';
+      return '请只用一句自然过渡语说明进入下一道主问题，不要提出具体追问，不要引用候选人刚才的回答。';
     }
     if (action === 'guide_back') {
       return '请礼貌拉回当前问题和 JD 核心要求，围绕候选人刚才回避或跑偏的点问一个澄清问题。';
@@ -415,6 +425,30 @@ export class InterviewGraphService {
     );
 
     return facts.some((fact) => !previousFacts.has(fact));
+  }
+
+  private isComprehensiveAnswer(state: InterviewGraphAnnotationState) {
+    const answer = state.latestAnswer.trim();
+    const answerLength = this.countAnswerUnits(answer);
+    const factCount = state.listenerOutput?.facts.length ?? 0;
+    const riskSignals = state.listenerOutput?.riskSignals ?? [];
+    const hasMetric = /[0-9０-９]|%|％|提升|降低|准确率|召回率|AUC|RMSE|MAPE|显著|指标|验证|评估|收益|成本|耗时|效率/.test(answer);
+    const hasMethod = /模型|算法|方案|流程|步骤|首先|其次|然后|最后|通过|采用|使用|训练|验证|评估|实验|对比|优化|实现/.test(answer);
+    const hasResult = /结果|最终|因此|所以|达到|提升|降低|验证|证明|收敛|稳定|有效|产出|落地/.test(answer);
+    const hasShortOrDriftRisk = riskSignals.some((signal) => /回答过短|信息不足|跑偏|回避|无关/.test(signal));
+
+    return !hasShortOrDriftRisk &&
+      answerLength >= 120 &&
+      factCount >= 2 &&
+      hasMetric &&
+      hasMethod &&
+      hasResult;
+  }
+
+  private countAnswerUnits(content: string) {
+    const chineseChars = content.match(/[\u4e00-\u9fa5]/g)?.length ?? 0;
+    const englishWords = content.match(/[a-zA-Z0-9_+-]+/g)?.length ?? 0;
+    return chineseChars + englishWords;
   }
 
   private buildMemoryState(

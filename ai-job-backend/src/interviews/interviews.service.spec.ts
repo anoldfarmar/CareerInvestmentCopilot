@@ -455,7 +455,9 @@ describe('InterviewsService', () => {
       expect.objectContaining({
         role: 'assistant',
         questionId: 'q-2',
-        messageType: 'topic_switch',
+        content: questions[1].content,
+        messageType: 'question',
+        sourceLabel: '基于目标 JD',
       }),
     );
     expect(prisma.interviewSession.update).toHaveBeenCalledWith({
@@ -561,7 +563,123 @@ describe('InterviewsService', () => {
 
     expect(result.currentQuestion).toBe(2);
     expect(result.ended).toBe(false);
-    expect(result.messages.at(-1)).toEqual(expect.objectContaining({ questionId: 'q-2' }));
+    expect(result.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        questionId: 'q-2',
+        content: questions[1].content,
+        messageType: 'question',
+      }),
+    );
+  });
+
+  it('专业模式最后一题切换话题时会结束面试而不是继续追问', async () => {
+    const graphService = {
+      runTurn: jest.fn().mockResolvedValue({
+        stage: 'S3_EXTENSION',
+        listenerOutput: {
+          summary: '最后一题已回答完整。',
+          entities: [],
+          facts: ['回答了最后一题'],
+          missingSlots: [],
+          riskSignals: [],
+        },
+        strategistDecision: {
+          action: 'switch_topic',
+          nextState: 'S3_EXTENSION',
+          messageType: 'topic_switch',
+          reason: '最后一题已覆盖。',
+          targetCapability: '收尾',
+          speakerInstruction: '切到下一题。',
+          memoryPatch: ['回答了最后一题'],
+        },
+        speakerOutput: {
+          messageType: 'topic_switch',
+          content: '好的，我们进入下一道主问题。',
+        },
+        turnSummaries: [
+          {
+            turn: 10,
+            topic: '第二题',
+            nodeId: 'q-2',
+            facts: ['回答了最后一题'],
+            missingSlots: [],
+            riskSignals: [],
+          },
+        ],
+        memoryState: { candidateClaims: ['回答了最后一题'] },
+        evaluationState: null,
+      }),
+    };
+    const graphEnabledService = new InterviewsService(
+      prisma as unknown as PrismaService,
+      undefined,
+      graphService as never,
+    );
+
+    prisma.interviewSession.findFirst.mockResolvedValue({
+      id: 'session-last-switch',
+      type: 'professional',
+      totalQuestions: 2,
+      currentQuestion: 2,
+      ended: false,
+      startedAt,
+      jobDescription: '需要工程经验。',
+      knowledgeBaseIds: [],
+      questions,
+      questionFeedback: {},
+      strategySnapshot: { version: 'v1' },
+      interviewState: { stage: 'S3_EXTENSION' },
+      memoryState: null,
+      evaluationState: null,
+      messages: [
+        {
+          id: 'assistant-1',
+          sessionId: 'session-last-switch',
+          role: 'assistant',
+          content: questions[1].content,
+          questionId: 'q-2',
+          createdAt: startedAt.toISOString(),
+        },
+      ],
+    });
+    prisma.interviewSession.update.mockImplementation(({ data }) =>
+      Promise.resolve({
+        id: 'session-last-switch',
+        type: 'professional',
+        totalQuestions: 2,
+        currentQuestion: 2,
+        ended: false,
+        startedAt,
+        knowledgeBaseIds: [],
+        questions,
+        questionFeedback: {},
+        ...data,
+      }),
+    );
+
+    const result = await graphEnabledService.submitAnswer(10, 'session-last-switch', {
+      answer: '最后一题回答。',
+    });
+
+    expect(result.currentQuestion).toBe(2);
+    expect(result.ended).toBe(true);
+    expect(result.messages.at(-1)).toEqual(
+      expect.objectContaining({
+        role: 'assistant',
+        messageType: 'closing',
+        sourceLabel: '面试结束提示',
+      }),
+    );
+    expect(prisma.interviewSession.update).toHaveBeenCalledWith({
+      where: { id: 'session-last-switch' },
+      data: expect.objectContaining({
+        ended: true,
+        interviewState: expect.objectContaining({
+          stage: 'FINISHED',
+          lastAction: 'switch_topic',
+        }),
+      }),
+    });
   });
 
   it('专业模式流式提交会发送进度事件和最终 session', async () => {

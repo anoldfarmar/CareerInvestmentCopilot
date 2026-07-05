@@ -59,6 +59,64 @@ describe('InterviewGraphService', () => {
     );
   });
 
+  it('候选人回答已经完整时会跳过继续追问并切到下一道主问题', async () => {
+    const aiService = {
+      runListener: jest.fn().mockResolvedValue({
+        summary: '候选人完整说明了建模项目。',
+        entities: ['SARIMAX', 'ADF', 'AIC'],
+        facts: ['说明了数据场景', '说明了参数选择方法', '说明了验证指标和业务结果'],
+        missingSlots: [],
+        riskSignals: [],
+      }),
+      runStrategist: jest.fn().mockResolvedValue({
+        action: 'continue_deep_dive',
+        nextState: 'S2_CORE_DEEP_DIVE',
+        messageType: 'follow_up',
+        reason: '还可以继续追问参数细节。',
+        targetCapability: '建模能力',
+        speakerInstruction: '继续追问参数选择。',
+        memoryPatch: ['说明了参数选择方法'],
+      }),
+      runSpeaker: jest.fn().mockResolvedValue({
+        messageType: 'topic_switch',
+        content: '好的，我们进入下一道主问题。',
+      }),
+    };
+    const service = new InterviewGraphService(aiService as never);
+    const answer = [
+      '在鲜销超短定价项目中，我先用 ADF 单位根检验和 ACF、PACF 判断销量序列是否平稳，并根据季节周期构造 SARIMAX 的 p、d、q 与季节项参数。',
+      '训练阶段通过网格搜索对比 AIC 和 BIC，结合留出集滚动验证评估 MAPE、RMSE 和预测稳定性，同时把节假日、价格、库存作为外生变量输入模型。',
+      '最终预测结果进入线性规划定价模块，用需求预测约束库存和利润目标，验证后促销损耗降低 12%，周转效率提升 8%，并沉淀了自动化训练脚本。',
+    ].join('');
+
+    const result = await service.runTurn({
+      sessionId: 'session-complete',
+      userId: 10,
+      stage: 'S2_CORE_DEEP_DIVE',
+      latestAnswer: answer,
+      currentQuestion: {
+        id: 'q-1',
+        content: '请说明 SARIMAX 项目的参数选择和验证方式。',
+        dimension: 'professional',
+      },
+    });
+
+    expect(result.strategistDecision).toEqual(
+      expect.objectContaining({
+        action: 'switch_topic',
+        messageType: 'topic_switch',
+        policyOverride: expect.stringContaining('较完整答案'),
+      }),
+    );
+    expect(aiService.runSpeaker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: expect.objectContaining({
+          action: 'switch_topic',
+        }),
+      }),
+    );
+  });
+
   it('Graph State 只保留最近 3 轮原始对话，避免上下文膨胀', async () => {
     const service = new InterviewGraphService();
     const result = await service.runTurn({

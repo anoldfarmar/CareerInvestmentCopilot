@@ -8,7 +8,12 @@ import { CreateInterviewSessionDto } from './dto/create-interview-session.dto';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { SubmitQuestionFeedbackDto } from './dto/submit-question-feedback.dto';
 import { InterviewGraphService, type InterviewGraphProgressEvent } from './graph/interview-graph.service';
-import { DEFAULT_INTERVIEW_STAGE, type InterviewGraphMessage, type InterviewStage } from './graph/interview-graph.state';
+import {
+  DEFAULT_INTERVIEW_STAGE,
+  type InterviewGraphMessage,
+  type InterviewStage,
+  type SpeakerOutput,
+} from './graph/interview-graph.state';
 import { InterviewAiService, type InterviewKnowledgeSnippet, type InterviewStrategySnapshot } from './interview-ai.service';
 import { InterviewRagService, type RagRecord } from './interview-rag.service';
 
@@ -496,16 +501,8 @@ export class InterviewsService {
 
       const transition = this.resolveProfessionalGraphTransition(questions, currentQuestion, graphState);
       const speakerOutput = graphState.speakerOutput;
-      if (speakerOutput?.content) {
-        const messageQuestion = transition.messageQuestion;
-        messages.push({
-          ...this.createMessage('assistant', speakerOutput.content, session.id, messageQuestion.id),
-          messageType: speakerOutput.messageType,
-          dimension: messageQuestion.dimension,
-          difficulty: messageQuestion.difficulty,
-          sourceLabel: 'LangGraph 专业追问',
-          sourceType: messageQuestion.sourceType,
-        });
+      if (speakerOutput?.content || transition.shouldAdvance || transition.ended) {
+        messages.push(this.buildProfessionalGraphAssistantMessage(session.id, speakerOutput, transition));
       }
 
       const updated = await this.prisma.interviewSession.update({
@@ -552,16 +549,8 @@ export class InterviewsService {
       const questions = this.readQuestions(session.questions);
       const transition = this.resolveProfessionalGraphTransition(questions, currentQuestion, graphState);
       const speakerOutput = graphState.speakerOutput;
-      if (speakerOutput?.content) {
-        const messageQuestion = transition.messageQuestion;
-        messages.push({
-          ...this.createMessage('assistant', speakerOutput.content, session.id, messageQuestion.id),
-          messageType: speakerOutput.messageType,
-          dimension: messageQuestion.dimension,
-          difficulty: messageQuestion.difficulty,
-          sourceLabel: 'LangGraph 专业追问',
-          sourceType: messageQuestion.sourceType,
-        });
+      if (speakerOutput?.content || transition.shouldAdvance || transition.ended) {
+        messages.push(this.buildProfessionalGraphAssistantMessage(session.id, speakerOutput, transition));
       }
 
       const updated = await this.prisma.interviewSession.update({
@@ -603,6 +592,7 @@ export class InterviewsService {
       ended?: boolean;
       endedAt?: Date;
       stage?: InterviewStage;
+      shouldAdvance?: boolean;
     },
   ): Prisma.InterviewSessionUpdateInput {
     return {
@@ -634,10 +624,11 @@ export class InterviewsService {
   ) {
     const action = graphState.strategistDecision?.action;
     const nextQuestion = this.findNextActiveQuestion(questions, currentQuestion.order);
-    const shouldAdvance = action === 'switch_topic' || (action === 'wrap_up' && Boolean(nextQuestion));
+    const wantsAdvanceOrClose = action === 'switch_topic' || action === 'wrap_up';
+    const shouldAdvance = Boolean(nextQuestion) && wantsAdvanceOrClose;
     const messageQuestion = shouldAdvance && nextQuestion ? nextQuestion : currentQuestion;
-    const ended = action === 'wrap_up' && !nextQuestion;
-    const stage = shouldAdvance ? DEFAULT_INTERVIEW_STAGE : graphState.stage;
+    const ended = Boolean(wantsAdvanceOrClose && !nextQuestion);
+    const stage = ended ? 'FINISHED' : shouldAdvance ? DEFAULT_INTERVIEW_STAGE : graphState.stage;
 
     return {
       messageQuestion,
@@ -645,6 +636,33 @@ export class InterviewsService {
       ended,
       endedAt: ended ? new Date() : undefined,
       stage,
+      shouldAdvance,
+    };
+  }
+
+  private buildProfessionalGraphAssistantMessage(
+    sessionId: string,
+    speakerOutput: SpeakerOutput | undefined,
+    transition: {
+      messageQuestion: InterviewQuestionPreview;
+      shouldAdvance?: boolean;
+      ended?: boolean;
+    },
+  ): InterviewMessage {
+    if (transition.ended && !transition.shouldAdvance) {
+      return this.createClosingMessage(sessionId);
+    }
+
+    const messageQuestion = transition.messageQuestion;
+    const content = transition.shouldAdvance ? messageQuestion.content : speakerOutput?.content ?? '';
+
+    return {
+      ...this.createMessage('assistant', content, sessionId, messageQuestion.id),
+      messageType: transition.shouldAdvance ? 'question' : speakerOutput?.messageType,
+      dimension: messageQuestion.dimension,
+      difficulty: messageQuestion.difficulty,
+      sourceLabel: transition.shouldAdvance ? messageQuestion.sourceLabel : 'LangGraph 专业追问',
+      sourceType: messageQuestion.sourceType,
     };
   }
 

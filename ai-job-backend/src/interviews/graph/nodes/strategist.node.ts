@@ -18,8 +18,12 @@ export async function strategistNode(
   const hasDriftRisk = Boolean(listener?.riskSignals.some((signal) => /跑偏|回避|无关/.test(signal)));
   const consecutiveNodeTurns = countConsecutiveNodeTurns(state);
   const hasNewFacts = hasNewListenerFacts(state);
+  const isComprehensive = isComprehensiveAnswer(state);
   const shouldWrapUp = turnCount >= WRAP_UP_TURN_THRESHOLD;
-  const shouldSwitchTopic = consecutiveNodeTurns >= MAX_DEEP_DIVE_TURNS || (!hasNewFacts && consecutiveNodeTurns >= 1);
+  const shouldSwitchTopic =
+    isComprehensive ||
+    consecutiveNodeTurns >= MAX_DEEP_DIVE_TURNS ||
+    (!hasNewFacts && consecutiveNodeTurns >= 1);
   const action: InterviewGraphAction = shouldWrapUp
     ? 'wrap_up'
     : hasDriftRisk
@@ -78,6 +82,30 @@ function hasNewListenerFacts(state: InterviewGraphAnnotationState) {
   );
 
   return facts.some((fact) => !previousFacts.has(fact.trim()));
+}
+
+function isComprehensiveAnswer(state: InterviewGraphAnnotationState) {
+  const answer = state.latestAnswer.trim();
+  const answerLength = countAnswerUnits(answer);
+  const factCount = state.listenerOutput?.facts.length ?? 0;
+  const riskSignals = state.listenerOutput?.riskSignals ?? [];
+  const hasMetric = /[0-9０-９]|%|％|提升|降低|准确率|召回率|AUC|RMSE|MAPE|显著|指标|验证|评估|收益|成本|耗时|效率/.test(answer);
+  const hasMethod = /模型|算法|方案|流程|步骤|首先|其次|然后|最后|通过|采用|使用|训练|验证|评估|实验|对比|优化|实现/.test(answer);
+  const hasResult = /结果|最终|因此|所以|达到|提升|降低|验证|证明|收敛|稳定|有效|产出|落地/.test(answer);
+  const hasShortOrDriftRisk = riskSignals.some((signal) => /回答过短|信息不足|跑偏|回避|无关/.test(signal));
+
+  return !hasShortOrDriftRisk &&
+    answerLength >= 120 &&
+    factCount >= 2 &&
+    hasMetric &&
+    hasMethod &&
+    hasResult;
+}
+
+function countAnswerUnits(content: string) {
+  const chineseChars = content.match(/[\u4e00-\u9fa5]/g)?.length ?? 0;
+  const englishWords = content.match(/[a-zA-Z0-9_+-]+/g)?.length ?? 0;
+  return chineseChars + englishWords;
 }
 
 function decideNextState(current: InterviewStage, action: InterviewGraphAction): InterviewStage {
