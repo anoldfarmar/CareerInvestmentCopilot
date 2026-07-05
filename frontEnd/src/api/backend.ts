@@ -85,6 +85,8 @@ export interface BackendResumeVersion {
 export interface BackendReport {
   reportId?: string;
   id?: string;
+  sessionId?: string | null;
+  generatedBy?: string | null;
   title?: string | null;
   score?: number | null;
   level?: string | null;
@@ -907,6 +909,8 @@ export function mapBackendReport(report: BackendReport): InterviewReport {
 
   return {
     id: report.reportId ?? report.id ?? `report-${Date.now()}`,
+    sessionId: report.sessionId ?? null,
+    generatedBy: report.generatedBy ?? undefined,
     score: report.score ?? 80,
     level: report.level ?? undefined,
     evaluation: report.summary ?? report.title ?? "综合表现：待复盘",

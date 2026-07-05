@@ -349,6 +349,8 @@ export default function App() {
 
     const fallbackReport: InterviewReport = {
       id: "rep-" + Date.now(),
+      sessionId: activeInterviewSession?.sessionId ?? null,
+      generatedBy: "client-local",
       score,
       evaluation: score >= 88 ? "综合表现：优秀" : "综合表现：良好",
       companyName: setupCompany || "字节跳动",
@@ -576,8 +578,29 @@ export default function App() {
                 setActiveTab(v as any);
               }
             }}
-            onGenerateReport={(data) => {
-              // Update active report score of currently completed review
+            onGenerateReport={async (data) => {
+              const sessionId = activeReport?.sessionId ?? activeInterviewSession?.sessionId;
+              if (sessionId) {
+                const backendReport = await backendApi.generateInterviewReport(sessionId);
+                const mapped = mapBackendReport(backendReport);
+                const refreshed: InterviewReport = {
+                  ...mapped,
+                  companyName: data.companyName || mapped.companyName,
+                  positionName: data.positionName || mapped.positionName,
+                  resumeName: data.resumeName || mapped.resumeName,
+                  transcripts: mapped.transcripts.length ? mapped.transcripts : data.transcripts,
+                };
+                setActiveReport(refreshed);
+                setReports((prev) => [
+                  refreshed,
+                  ...prev.filter((report) =>
+                    report.id !== refreshed.id &&
+                    (!refreshed.sessionId || report.sessionId !== refreshed.sessionId),
+                  ),
+                ]);
+                return;
+              }
+
               if (activeReport) {
                 const refreshed = { ...activeReport, score: data.score };
                 setActiveReport(refreshed);

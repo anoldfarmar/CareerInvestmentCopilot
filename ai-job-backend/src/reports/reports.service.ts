@@ -735,8 +735,9 @@ export class ReportsService {
     }
 
     const fallbackMap = new Map(threads.map((thread) => [thread.id, this.buildLocalQuestionReview(thread)]));
-    return aiQuestions.map((item, index) => {
-      const fallback = fallbackMap.get(item.id) ?? this.buildLocalQuestionReview(threads[index] ?? {
+    const usedIndexes = new Set<number>();
+    const normalizeOne = (item: QuestionReview, index: number, fallbackThread?: QuestionThread) => {
+      const fallback = fallbackMap.get(item.id) ?? this.buildLocalQuestionReview(fallbackThread ?? {
         id: item.id ?? `q-${index + 1}`,
         question: item.question ?? `第 ${index + 1} 题`,
         answers: [],
@@ -758,7 +759,25 @@ export class ReportsService {
         improvement: { ...fallback.improvement, ...(item.improvement ?? {}) },
         qaTranscript: Array.isArray(item.qaTranscript) ? item.qaTranscript : fallback.qaTranscript,
       };
+    };
+
+    const reviews = threads.map((thread, index) => {
+      const matchedIndex = aiQuestions.findIndex((item, itemIndex) => !usedIndexes.has(itemIndex) && item.id === thread.id);
+      const itemIndex = matchedIndex >= 0 ? matchedIndex : index < aiQuestions.length && !usedIndexes.has(index) ? index : -1;
+      if (itemIndex < 0) {
+        return fallbackMap.get(thread.id) ?? this.buildLocalQuestionReview(thread);
+      }
+
+      usedIndexes.add(itemIndex);
+      return normalizeOne(aiQuestions[itemIndex], index, thread);
     });
+
+    const extraReviews = aiQuestions
+      .map((item, index) => ({ item, index }))
+      .filter(({ index }) => !usedIndexes.has(index))
+      .map(({ item, index }) => normalizeOne(item, threads.length + index));
+
+    return [...reviews, ...extraReviews];
   }
 
   private normalizeDimensions(dimensions: ReviewDimension[] | undefined, score: number) {

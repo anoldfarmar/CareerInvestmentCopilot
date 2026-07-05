@@ -31,6 +31,7 @@ export default function ReportView({
   const [saveInterviewDataMessage, setSaveInterviewDataMessage] = useState("");
 
   const reportScore = report?.score ?? score;
+  const isSyncedReport = Boolean(report?.sessionId && report.generatedBy !== "client-local");
   const dimensions = report?.dimensions ?? [];
   const questions = report?.questions ?? [];
   const nextActions = report?.nextActions?.length
@@ -119,7 +120,7 @@ export default function ReportView({
           <h1 className="font-sans text-sm font-bold text-primary">复盘报告</h1>
         </div>
         <span className="bg-primary/10 text-primary font-mono text-[9px] px-2 py-1 rounded font-bold">
-          {report?.id ? "DB SYNCED" : "LOCAL"}
+          {isSyncedReport ? "DB SYNCED" : "LOCAL"}
         </span>
       </header>
 

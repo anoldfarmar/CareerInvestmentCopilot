@@ -112,6 +112,8 @@ export interface InterviewTranscriptItem {
 
 export interface InterviewReport {
   id: string;
+  sessionId?: string | null;
+  generatedBy?: string;
   score: number;
   level?: string;
   evaluation: string;

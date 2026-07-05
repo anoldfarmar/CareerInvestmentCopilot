@@ -1,8 +1,14 @@
 import { PrismaService } from '../prisma/prisma.service';
+import { externalFetch } from '../common/http/external-http.client';
 import { ReportsService } from './reports.service';
+
+jest.mock('../common/http/external-http.client', () => ({
+  externalFetch: jest.fn(),
+}));
 
 describe('ReportsService', () => {
   const originalDeepSeekApiKey = process.env.DEEPSEEK_API_KEY;
+  const fetchMock = externalFetch as jest.MockedFunction<typeof externalFetch>;
   const prisma = {
     interviewSession: {
       findFirst: jest.fn(),
@@ -20,6 +26,7 @@ describe('ReportsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    fetchMock.mockReset();
     delete process.env.DEEPSEEK_API_KEY;
   });
 
@@ -228,6 +235,145 @@ describe('ReportsService', () => {
         id: 'q-2',
         answer: '',
         issues: expect.arrayContaining(['缺少回答内容']),
+      }),
+    );
+  });
+
+  it('AI 复盘少返回题目时会按会话题目补齐逐题诊断', async () => {
+    process.env.DEEPSEEK_API_KEY = 'test-key';
+    const createdAt = new Date('2026-06-18T00:00:00.000Z');
+    prisma.interviewSession.findFirst.mockResolvedValue({
+      id: 'session-ai-partial',
+      type: 'professional',
+      totalQuestions: 2,
+      questions: [
+        {
+          id: 'q-1',
+          order: 1,
+          content: '第 1 题：请介绍 SARIMAX 项目。',
+          dimension: 'professional',
+          difficulty: 'medium',
+          sourceLabel: '基于目标 JD',
+          skipped: false,
+        },
+        {
+          id: 'q-2',
+          order: 2,
+          content: '第 2 题：请说明 A/B 实验设计。',
+          dimension: 'professional',
+          difficulty: 'medium',
+          sourceLabel: '基于目标 JD',
+          skipped: false,
+        },
+      ],
+      messages: [
+        {
+          id: 'q-1',
+          role: 'assistant',
+          questionId: 'q-1',
+          content: '第 1 题：请介绍 SARIMAX 项目。',
+          createdAt: createdAt.toISOString(),
+        },
+        {
+          id: 'a-1',
+          role: 'user',
+          questionId: 'q-1',
+          content: '我负责 SARIMAX 销量预测，通过 RMSE 验证误差并降低库存损耗 10%。',
+          createdAt: createdAt.toISOString(),
+        },
+        {
+          id: 'q-2',
+          role: 'assistant',
+          questionId: 'q-2',
+          messageType: 'question',
+          content: '第 2 题：请说明 A/B 实验设计。',
+          createdAt: createdAt.toISOString(),
+        },
+        {
+          id: 'a-2',
+          role: 'user',
+          questionId: 'q-2',
+          content: '我会定义核心指标、样本量和分流策略，再用显著性检验判断效果。',
+          createdAt: createdAt.toISOString(),
+        },
+      ],
+    });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                score: 86,
+                level: '优秀',
+                summary: '整体表现较好。',
+                dimensions: [],
+                questions: [
+                  {
+                    id: 'q-1',
+                    question: '第 1 题：请介绍 SARIMAX 项目。',
+                    answer: 'AI 只返回了第一题。',
+                    comment: '第一题诊断。',
+                    correctPoints: ['说明了模型经验'],
+                    wrongPoints: [],
+                    issues: [],
+                    advice: '继续补充业务影响。',
+                    referenceAnswer: '参考表达。',
+                    diagnosis: {
+                      content: '内容较完整。',
+                      logic: '逻辑清楚。',
+                      expression: '表达自然。',
+                      depth: '有技术深度。',
+                    },
+                    improvement: {
+                      summary: '继续量化。',
+                      example: '示例。',
+                      nextTry: '下一次补指标。',
+                    },
+                    practiceResources: [],
+                    knowledgeTags: ['SARIMAX'],
+                    qaTranscript: [],
+                  },
+                ],
+                nextActions: [],
+                topDirections: [],
+                advantageSummary: [],
+                weaknessSummary: [],
+                interviewerSteeringReview: {
+                  successfulSteering: [],
+                  failedSteering: [],
+                  nextTimeTactics: [],
+                },
+              }),
+            },
+          },
+        ],
+      }),
+    } as unknown as Response);
+    prisma.reviewReport.upsert.mockImplementation(({ create }) =>
+      Promise.resolve({
+        id: 'report-ai-partial',
+        ...create,
+        createdAt,
+      }),
+    );
+
+    const result = await service.generate(10, { sessionId: 'session-ai-partial' });
+
+    expect(result.generatedBy).toBe('ai');
+    expect(result.questions).toHaveLength(2);
+    expect(result.questions[0]).toEqual(expect.objectContaining({ id: 'q-1', comment: '第一题诊断。' }));
+    expect(result.questions[1]).toEqual(
+      expect.objectContaining({
+        id: 'q-2',
+        question: expect.stringContaining('A/B 实验'),
+        diagnosis: expect.objectContaining({
+          content: expect.any(String),
+          logic: expect.any(String),
+          expression: expect.any(String),
+          depth: expect.any(String),
+        }),
       }),
     );
   });

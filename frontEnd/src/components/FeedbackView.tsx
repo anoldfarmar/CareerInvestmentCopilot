@@ -14,7 +14,7 @@ interface FeedbackViewProps {
     positionName: string;
     resumeName: string;
     transcripts: InterviewTranscriptItem[];
-  }) => void;
+  }) => void | Promise<void>;
 }
 
 export default function FeedbackView({
@@ -37,17 +37,21 @@ export default function FeedbackView({
       setGenStatus("AI STAR话术优选整合中...");
       setTimeout(() => {
         setGenStatus("全维评估报告已就绪！");
-        setTimeout(() => {
-          setIsGenerating(false);
-
-          onGenerateReport({
-            score,
-            companyName,
-            positionName,
-            resumeName,
-            transcripts,
-          });
-          onNavigate("report-detail");
+        setTimeout(async () => {
+          try {
+            await onGenerateReport({
+              score,
+              companyName,
+              positionName,
+              resumeName,
+              transcripts,
+            });
+            onNavigate("report-detail");
+          } catch (error) {
+            setGenStatus(error instanceof Error ? error.message : "复盘报告加载失败，请稍后重试。");
+          } finally {
+            setIsGenerating(false);
+          }
         }, 800);
       }, 900);
     }, 900);
