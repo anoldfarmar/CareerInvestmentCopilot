@@ -31,6 +31,7 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
   app.use(requestIdMiddleware);
+  app.use('/favicon.ico', (_req, res) => res.status(204).end());
   app.use('/storage', express.static(join(process.cwd(), 'storage')));
   app.use('/audio', express.static(process.env.AUDIO_UPLOAD_DIR ?? '/home/public/audio'));
   app.use(

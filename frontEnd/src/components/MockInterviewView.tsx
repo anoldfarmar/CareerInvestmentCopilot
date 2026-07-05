@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { BackendInterviewProgress, BackendReport, backendApi } from "../api/backend";
+import { BackendInterviewProgress, BackendReport, InterviewStreamEvent, backendApi } from "../api/backend";
 import { ChatMessage, InterviewSession, InterviewTranscriptItem } from "../types";
 
 interface MockInterviewViewProps {
@@ -135,6 +135,12 @@ export default function MockInterviewView({
       return;
     }
 
+    const shouldUseStream = currentSession.type === "professional";
+    if (shouldUseStream) {
+      await handleSendStream(userText);
+      return;
+    }
+
     setIsTyping(true);
     try {
       const answered = await backendApi.submitInterviewAnswer(currentSession.sessionId, userText);
@@ -144,6 +150,78 @@ export default function MockInterviewView({
       syncSessionToChat(nextSession);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "回答提交失败，请稍后重试。");
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  const handleSendStream = async (userText: string) => {
+    if (!currentSession?.sessionId) return;
+    const now = new Date().toLocaleTimeString("zh-CN", { minute: "2-digit", second: "2-digit" });
+    const aiMessageId = `msg-ai-stream-${Date.now()}`;
+
+    setIsTyping(true);
+    setMessages((prev) => [
+      ...prev,
+      { id: `msg-user-${Date.now()}`, sender: "user", text: userText, timestamp: now },
+      { id: aiMessageId, sender: "ai", text: "面试官正在梳理你的回答...", timestamp: now },
+    ]);
+
+    try {
+      let streamedText = "";
+      let finalSession: InterviewSession | null = null;
+      await backendApi.submitInterviewAnswerStream(currentSession.sessionId, userText, (event: InterviewStreamEvent) => {
+        if (event.type === "thinking_start") {
+          return;
+        }
+        if (event.type === "listener_done") {
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === aiMessageId
+                ? { ...message, text: "面试官正在判断下一步追问方向..." }
+                : message,
+            ),
+          );
+          return;
+        }
+        if (event.type === "strategist_done") {
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === aiMessageId
+                ? { ...message, text: event.action === "pressure_test" ? "面试官正在准备压力追问..." : "面试官正在组织问题..." }
+                : message,
+            ),
+          );
+          return;
+        }
+        if (event.type === "speaker_delta") {
+          streamedText += event.delta;
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === aiMessageId
+                ? { ...message, text: streamedText }
+                : message,
+            ),
+          );
+          return;
+        }
+        if (event.type === "session") {
+          finalSession = event.session;
+          return;
+        }
+        if (event.type === "error") {
+          throw new Error(event.message || "流式回答提交失败，请稍后重试。");
+        }
+      });
+
+      if (finalSession) {
+        syncSessionToChat(finalSession);
+      }
+    } catch (error) {
+      setMessages((prev) => prev.filter((message) => message.id !== aiMessageId));
+      setErrorMessage(error instanceof Error ? error.message : "流式回答失败，已尝试普通提交。");
+      const answered = await backendApi.submitInterviewAnswer(currentSession.sessionId, userText);
+      syncSessionToChat(answered);
     } finally {
       setIsTyping(false);
     }
@@ -243,12 +321,10 @@ export default function MockInterviewView({
     setIsTyping(true);
     setErrorMessage("");
     try {
-      let generatedReport: BackendReport | undefined;
       if (currentSession?.sessionId) {
         await backendApi.endInterviewSession(currentSession.sessionId);
-        generatedReport = await backendApi.generateInterviewReport(currentSession.sessionId);
       }
-      onCompleteInterview(finalScore, transcripts, generatedReport);
+      onCompleteInterview(finalScore, transcripts);
       onNavigate("feedback");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "结束面试或生成报告失败，请稍后重试。");

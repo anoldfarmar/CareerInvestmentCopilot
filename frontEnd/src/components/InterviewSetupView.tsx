@@ -37,6 +37,7 @@ export default function InterviewSetupView({
   const [startError, setStartError] = useState("");
   const [activeSession, setActiveSession] = useState<InterviewSession | null>(null);
   const [isCheckingActive, setIsCheckingActive] = useState(true);
+  const [isDeletingActive, setIsDeletingActive] = useState(false);
 
   useEffect(() => {
     if (!selectedResumeId && interviewReadyResumes[0]) {
@@ -103,10 +104,26 @@ export default function InterviewSetupView({
     }
   };
 
+  const handleDeleteActiveSession = async () => {
+    if (!activeSession || isDeletingActive) return;
+    if (!window.confirm("确定删除这条未完成的模拟面试记录吗？")) return;
+
+    setIsDeletingActive(true);
+    setStartError("");
+    try {
+      await backendApi.deleteInterviewSession(activeSession.sessionId);
+      setActiveSession(null);
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : "删除模拟面试记录失败，请稍后重试。");
+    } finally {
+      setIsDeletingActive(false);
+    }
+  };
+
   return (
     <div id="interview-prep-root" className="animate-fade-in-up bg-background min-h-screen">
       {/* TopAppBar */}
-      <header className="fixed top-0 w-full z-50 bg-white border-b border-border-subtle h-16 flex justify-between items-center px-4 max-w-md mx-auto left-0 right-0">
+      <header className="sticky top-0 w-full z-50 bg-white border-b border-border-subtle h-16 flex justify-between items-center px-4 max-w-md mx-auto">
         <div className="flex items-center gap-2">
           <button
             onClick={() => onNavigate("workbench")}
@@ -126,26 +143,39 @@ export default function InterviewSetupView({
       </header>
 
       {/* Main Container */}
-      <main className="mt-16 flex-grow max-w-md mx-auto px-5 pt-5 pb-32 space-y-6">
+      <main className="flex-grow max-w-md mx-auto px-5 pt-4 pb-32 space-y-6">
         {/* 1. Resume Selection */}
         {activeSession && (
-          <section className="rounded-xl border border-primary-container/40 bg-white p-4 shadow-sm">
-            <div className="flex items-start gap-3">
-              <span className="w-9 h-9 rounded-lg bg-primary-container/20 text-primary flex items-center justify-center flex-shrink-0">
-                <span className="material-symbols-outlined text-[20px]">history</span>
+          <section className="rounded-xl border border-primary-container/40 bg-white p-3 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="w-8 h-8 rounded-lg bg-primary-container/20 text-primary flex items-center justify-center flex-shrink-0">
+                <span className="material-symbols-outlined text-[18px]">history</span>
               </span>
               <div className="min-w-0 flex-1">
-                <h2 className="font-sans text-sm font-extrabold text-on-surface">继续上次模拟面试</h2>
-                <p className="mt-1 font-sans text-[11px] leading-relaxed text-on-surface-variant">
-                  当前进行到第 {activeSession.currentQuestion} / {activeSession.totalQuestions} 题，已保存对话记录。
+                <h2 className="font-sans text-xs font-extrabold text-on-surface">继续上次模拟面试</h2>
+                <p className="mt-0.5 font-sans text-[10px] leading-relaxed text-on-surface-variant">
+                  第 {activeSession.currentQuestion} / {activeSession.totalQuestions} 题，已保存对话记录。
                 </p>
+              </div>
+              <div className="flex flex-shrink-0 gap-2">
                 <button
                   type="button"
                   onClick={() => onResumeInterview(activeSession)}
-                  className="mt-3 w-full h-10 rounded-xl bg-primary text-white text-xs font-extrabold flex items-center justify-center gap-1.5"
+                  className="w-9 h-9 rounded-lg bg-primary text-white flex items-center justify-center"
+                  aria-label="继续面试"
                 >
-                  <span className="material-symbols-outlined text-[17px]">play_arrow</span>
-                  继续面试
+                  <span className="material-symbols-outlined text-[18px]">play_arrow</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteActiveSession}
+                  disabled={isDeletingActive}
+                  className="w-9 h-9 rounded-lg bg-red-50 text-red-600 flex items-center justify-center disabled:opacity-50"
+                  aria-label="删除未完成面试"
+                >
+                  <span className={`material-symbols-outlined text-[18px] ${isDeletingActive ? "animate-spin" : ""}`}>
+                    {isDeletingActive ? "progress_activity" : "delete"}
+                  </span>
                 </button>
               </div>
             </div>

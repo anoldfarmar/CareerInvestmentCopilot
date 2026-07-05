@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AuthUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -33,6 +34,13 @@ export class InterviewsController {
   @ApiParam({ name: 'sessionId', description: '面试会话 id' })
   findSession(@CurrentUser() user: AuthUser, @Param('sessionId') sessionId: string) {
     return this.interviewsService.findSession(user.id, sessionId);
+  }
+
+  @Delete('sessions/:sessionId')
+  @ApiOperation({ summary: '删除模拟面试会话' })
+  @ApiParam({ name: 'sessionId', description: '面试会话 id' })
+  removeSession(@CurrentUser() user: AuthUser, @Param('sessionId') sessionId: string) {
+    return this.interviewsService.removeSession(user.id, sessionId);
   }
 
   @Post('sessions/:sessionId/questions')
@@ -80,6 +88,37 @@ export class InterviewsController {
     @Body() body: SubmitAnswerDto,
   ) {
     return this.interviewsService.submitAnswer(user.id, sessionId, body);
+  }
+
+  @Post('sessions/:sessionId/answer/stream')
+  @ApiOperation({ summary: '提交一轮专业模拟面试回答并以 SSE 流式返回进度' })
+  @ApiParam({ name: 'sessionId', description: '面试会话 id' })
+  async submitAnswerStream(
+    @CurrentUser() user: AuthUser,
+    @Param('sessionId') sessionId: string,
+    @Body() body: SubmitAnswerDto,
+    @Res() res: Response,
+  ) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const writeEvent = async (event: { type: string; [key: string]: unknown }) => {
+      res.write(`event: ${event.type}\n`);
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      await this.interviewsService.submitAnswerStream(user.id, sessionId, body, writeEvent);
+      res.end();
+    } catch (error) {
+      await writeEvent({
+        type: 'error',
+        message: error instanceof Error ? error.message : '流式提交失败',
+      });
+      res.end();
+    }
   }
 
   @Post('sessions/:sessionId/next-question')

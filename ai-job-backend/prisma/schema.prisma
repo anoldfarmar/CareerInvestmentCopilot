@@ -243,6 +243,9 @@ model InterviewSession {
   questions        Json?
   questionFeedback Json?
   strategySnapshot Json?
+  interviewState   Json?
+  memoryState      Json?
+  evaluationState  Json?
   messages         Json
 
   userId           Int

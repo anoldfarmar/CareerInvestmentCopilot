@@ -156,6 +156,24 @@ export interface InterviewReport {
     reason: string;
     actions: string[];
   }>;
+  advantageSummary?: Array<{
+    advantage: string;
+    evidence: string[];
+    howToAmplify: string;
+    steeringExamples: string[];
+    risk: string;
+  }>;
+  weaknessSummary?: Array<{
+    weakness: string;
+    observedIn: string[];
+    whyItMatters: string;
+    repairPlan: string[];
+  }>;
+  interviewerSteeringReview?: {
+    successfulSteering: string[];
+    failedSteering: string[];
+    nextTimeTactics: string[];
+  };
 }
 
 export interface GlobalState {

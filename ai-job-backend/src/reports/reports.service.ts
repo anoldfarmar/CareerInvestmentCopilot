@@ -179,7 +179,14 @@ export class ReportsService {
     const questions = this.readQuestions(session.questions);
     const threads = this.buildQuestionThreads(questions, messages);
     const strategySnapshot = this.readJsonObject(session.strategySnapshot);
-    const reportData = await this.buildReportData(session.type, session.totalQuestions, threads, strategySnapshot);
+    const finalEvaluation = this.readJsonObject(session.evaluationState);
+    const reportData = await this.buildReportData(
+      session.type,
+      session.totalQuestions,
+      threads,
+      strategySnapshot,
+      finalEvaluation,
+    );
 
     const report = await this.prisma.reviewReport.upsert({
       where: { sessionId: session.id },
@@ -215,18 +222,19 @@ export class ReportsService {
     totalQuestions: number,
     threads: QuestionThread[],
     strategySnapshot?: Record<string, unknown>,
+    finalEvaluation?: Record<string, unknown>,
   ) {
     try {
-      const aiReport = await this.generateAiReport(type, totalQuestions, threads, strategySnapshot);
+      const aiReport = await this.generateAiReport(type, totalQuestions, threads, strategySnapshot, finalEvaluation);
       return {
         title: `${this.typeLabel(type)}复盘报告`,
         generatedBy: 'ai',
-        score: this.clampScore(aiReport.score),
+        score: this.clampScore(this.numberOrFallback(finalEvaluation?.overallScore, aiReport.score)),
         level: aiReport.level || this.scoreLevel(aiReport.score),
         summary: aiReport.summary,
         dimensions: this.normalizeDimensions(aiReport.dimensions, aiReport.score),
         questions: this.normalizeQuestionReviews(aiReport.questions, threads),
-        nextActions: this.normalizeStringArray(aiReport.nextActions, this.buildLocalNextActions(aiReport.score)),
+        nextActions: this.normalizeStringArray(aiReport.nextActions, this.buildLocalNextActions(aiReport.score, undefined, finalEvaluation)),
         topDirections: this.normalizeTopDirections(aiReport.topDirections),
         advantageSummary: this.normalizeAdvantageSummary(aiReport.advantageSummary, threads, strategySnapshot),
         weaknessSummary: this.normalizeWeaknessSummary(aiReport.weaknessSummary, threads),
@@ -234,7 +242,7 @@ export class ReportsService {
       };
     } catch (error) {
       this.logger.warn(`DeepSeek 复盘报告生成失败，已使用本地规则报告：${error instanceof Error ? error.message : String(error)}`);
-      return this.buildLocalReport(type, totalQuestions, threads, strategySnapshot);
+      return this.buildLocalReport(type, totalQuestions, threads, strategySnapshot, finalEvaluation);
     }
   }
 
@@ -243,6 +251,7 @@ export class ReportsService {
     totalQuestions: number,
     threads: QuestionThread[],
     strategySnapshot?: Record<string, unknown>,
+    finalEvaluation?: Record<string, unknown>,
   ): Promise<AiReportPayload> {
     const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
@@ -270,6 +279,7 @@ export class ReportsService {
               totalQuestions,
               answeredQuestions: threads.filter((thread) => thread.answers.length > 0).length,
               strategySnapshot: strategySnapshot ?? null,
+              finalEvaluation: finalEvaluation ?? null,
               questionThreads: threads.map((thread) => ({
                 id: thread.id,
                 question: thread.question,
@@ -319,9 +329,10 @@ export class ReportsService {
     totalQuestions: number,
     threads: QuestionThread[],
     strategySnapshot?: Record<string, unknown>,
+    finalEvaluation?: Record<string, unknown>,
   ) {
     const answered = threads.filter((thread) => thread.answers.length > 0);
-    const score = this.calculateScore(answered, totalQuestions);
+    const score = this.clampScore(this.numberOrFallback(finalEvaluation?.overallScore, this.calculateScore(answered, totalQuestions)));
     const questionReviews = threads.map((thread) => this.buildLocalQuestionReview(thread));
     const topDirections = this.buildLocalTopDirections(questionReviews, score);
 
@@ -330,10 +341,10 @@ export class ReportsService {
       generatedBy: 'local',
       score,
       level: this.scoreLevel(score),
-      summary: this.buildLocalSummary(score, answered.length, totalQuestions, topDirections),
+      summary: this.buildLocalSummary(score, answered.length, totalQuestions, topDirections, finalEvaluation),
       dimensions: this.buildLocalDimensions(score, questionReviews),
       questions: questionReviews,
-      nextActions: this.buildLocalNextActions(score, topDirections),
+      nextActions: this.buildLocalNextActions(score, topDirections, finalEvaluation),
       topDirections,
       advantageSummary: this.buildLocalAdvantageSummary(questionReviews, strategySnapshot),
       weaknessSummary: this.buildLocalWeaknessSummary(questionReviews),
@@ -465,7 +476,18 @@ export class ReportsService {
     return '需要补强';
   }
 
-  private buildLocalSummary(score: number, answered: number, total: number, topDirections: TopDirection[]) {
+  private buildLocalSummary(
+    score: number,
+    answered: number,
+    total: number,
+    topDirections: TopDirection[],
+    finalEvaluation?: Record<string, unknown>,
+  ) {
+    const verifiedStrengths = this.normalizeStringArray(finalEvaluation?.verifiedStrengths, []);
+    if (verifiedStrengths.length > 0) {
+      return `本次面试完成 ${answered}/${total} 题，专业评估分 ${score}。已验证优势：${verifiedStrengths.slice(0, 2).join('；')}。后续重点建议：${topDirections.map((item) => item.title).join('、')}。`;
+    }
+
     const directionText = topDirections.map((item) => item.title).join('、');
     return `本次面试完成 ${answered}/${total} 题，综合评分 ${score}。后续重点建议：${directionText}。`;
   }
@@ -608,14 +630,19 @@ export class ReportsService {
     ];
   }
 
-  private buildLocalNextActions(score: number, topDirections?: TopDirection[]) {
+  private buildLocalNextActions(
+    score: number,
+    topDirections?: TopDirection[],
+    finalEvaluation?: Record<string, unknown>,
+  ) {
+    const evaluatorActions = this.normalizeStringArray(finalEvaluation?.nextPracticeActions, []);
     const directions = topDirections ?? [];
     const actions = directions.flatMap((direction) => direction.actions);
     if (score >= 80) {
-      return ['进行一轮压力面试训练', ...actions.slice(0, 3)];
+      return ['进行一轮压力面试训练', ...evaluatorActions.slice(0, 3), ...actions.slice(0, 3)];
     }
 
-    return ['重写自我介绍并控制在 60 秒内', ...actions.slice(0, 4)];
+    return ['重写自我介绍并控制在 60 秒内', ...evaluatorActions.slice(0, 3), ...actions.slice(0, 4)];
   }
 
   private buildSteeringAdvice(thread: QuestionThread, answer: string, issues: string[]) {
@@ -862,6 +889,11 @@ export class ReportsService {
       return 60;
     }
     return Math.min(Math.max(Math.round(score), 1), 100);
+  }
+
+  private numberOrFallback(value: unknown, fallback: unknown) {
+    const score = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(score) ? score : fallback;
   }
 
   private typeLabel(type: string) {

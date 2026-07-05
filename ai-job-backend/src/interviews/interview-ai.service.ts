@@ -1,6 +1,15 @@
 import { BadGatewayException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { extractJsonObject } from '../common/ai/json.util';
 import { externalFetch } from '../common/http/external-http.client';
+import type {
+  InterviewGraphMessage,
+  InterviewStage,
+  InterviewTurnSummary,
+  EvaluatorOutput,
+  ListenerOutput,
+  SpeakerOutput,
+  StrategistDecision,
+} from './graph/interview-graph.state';
 import type { InterviewQuestionPreview } from './interviews.service';
 
 type DeepseekChatResponse = {
@@ -90,6 +99,10 @@ export type InterviewStrategySnapshot = {
 export class InterviewAiService {
   private readonly baseUrl = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com';
   private readonly model = process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-pro';
+  private readonly listenerModel = process.env.INTERVIEW_LISTENER_MODEL ?? this.model;
+  private readonly strategistModel = process.env.INTERVIEW_STRATEGIST_MODEL ?? this.model;
+  private readonly speakerModel = process.env.INTERVIEW_SPEAKER_MODEL ?? this.model;
+  private readonly evaluatorModel = process.env.INTERVIEW_EVALUATOR_MODEL ?? this.model;
 
   async generateQuestionPlan(input: {
     interviewType: string;
@@ -253,6 +266,190 @@ export class InterviewAiService {
     };
   }
 
+  async generateOpeningQuestion(input: {
+    question: InterviewQuestionPreview;
+    jobDescription?: string;
+    resumeContext?: {
+      title: string;
+      focus: string;
+      text: string;
+    };
+    strategySnapshot?: InterviewStrategySnapshot;
+  }): Promise<SpeakerOutput> {
+    const content = await this.chatJson(
+      this.createSpeakerSystemPrompt(),
+      JSON.stringify({
+        task: 'professional_interview_opening_speaker',
+        stage: 'S0_ICE_BREAK',
+        rule: 'Generate the first visible interviewer question. Ask one concrete, natural question. Do not expose JD/resume instructions, rubrics, capability tags, or strategy.',
+        currentQuestionDraft: {
+          content: input.question.content,
+          dimension: input.question.dimension,
+          difficulty: input.question.difficulty,
+          sourceType: input.question.sourceType,
+        },
+        jobDescription: input.jobDescription ?? '',
+        resumeContext: input.resumeContext
+          ? {
+              title: input.resumeContext.title,
+              focus: input.resumeContext.focus,
+              text: input.resumeContext.text.slice(0, 1600),
+            }
+          : null,
+        strategySnapshot: input.strategySnapshot
+          ? {
+              advantageProfile: input.strategySnapshot.advantageProfile.slice(0, 3),
+              weaknessProfile: input.strategySnapshot.weaknessProfile.slice(0, 3),
+              mainGoal: input.strategySnapshot.interviewStrategy.mainGoal,
+            }
+          : null,
+      }),
+      this.speakerModel,
+    );
+    const parsed = this.parseJsonObject(content);
+
+    return {
+      messageType: this.toGraphMessageType(parsed.messageType, 'continue_deep_dive'),
+      content: this.toText(parsed.content, input.question.content),
+    };
+  }
+
+  async runListener(input: {
+    stage: InterviewStage;
+    currentQuestion?: { content: string; dimension?: string; difficulty?: string };
+    latestAnswer: string;
+    recentRawMessages: InterviewGraphMessage[];
+    turnSummaries: InterviewTurnSummary[];
+    jobDescription?: string;
+    memoryState?: unknown;
+  }): Promise<ListenerOutput> {
+    const content = await this.chatJson(
+      this.createListenerSystemPrompt(),
+      JSON.stringify({
+        task: 'professional_interview_listener',
+        stage: input.stage,
+        currentQuestion: input.currentQuestion ?? null,
+        latestAnswer: input.latestAnswer,
+        recentRawMessages: input.recentRawMessages.slice(-6),
+        turnSummaries: input.turnSummaries.slice(-10),
+        jobDescription: input.jobDescription ?? '',
+        memoryState: input.memoryState ?? null,
+      }),
+      this.listenerModel,
+    );
+    const parsed = this.parseJsonObject(content);
+
+    return {
+      summary: this.toText(parsed.summary, '候选人回答已记录，但摘要不足。'),
+      entities: this.toStringArray(parsed.entities).slice(0, 12),
+      facts: this.toStringArray(parsed.facts).slice(0, 8),
+      missingSlots: this.toStringArray(parsed.missingSlots).slice(0, 8),
+      riskSignals: this.toStringArray(parsed.riskSignals).slice(0, 8),
+    };
+  }
+
+  async runStrategist(input: {
+    stage: InterviewStage;
+    listenerOutput: ListenerOutput;
+    turnSummaries: InterviewTurnSummary[];
+    strategySnapshot?: unknown;
+    memoryState?: unknown;
+    jobDescription?: string;
+  }): Promise<StrategistDecision> {
+    const content = await this.chatJson(
+      this.createStrategistSystemPrompt(),
+      JSON.stringify({
+        task: 'professional_interview_strategy_decision',
+        stage: input.stage,
+        listenerOutput: input.listenerOutput,
+        turnSummaries: input.turnSummaries.slice(-10),
+        strategySnapshot: input.strategySnapshot ?? null,
+        memoryState: input.memoryState ?? null,
+        jobDescription: input.jobDescription ?? '',
+      }),
+      this.strategistModel,
+    );
+    const parsed = this.parseJsonObject(content);
+    const action = this.toGraphAction(parsed.action);
+    const nextState = this.toGraphStage(parsed.nextState, this.defaultNextStage(input.stage, action));
+
+    return {
+      action,
+      nextState,
+      messageType: this.toGraphMessageType(parsed.messageType, action),
+      reason: this.toText(parsed.reason, '需要继续验证候选人的回答真实性和岗位匹配度。'),
+      targetCapability: this.toText(parsed.targetCapability, '项目真实性和岗位匹配度'),
+      targetResumeNode: this.toOptionalText(parsed.targetResumeNode),
+      speakerInstruction: this.toText(parsed.speakerInstruction, '请围绕候选人的回答继续追问一个核心问题。'),
+      memoryPatch: this.toStringArray(parsed.memoryPatch).slice(0, 8),
+    };
+  }
+
+  async runSpeaker(input: {
+    stage: InterviewStage;
+    latestAnswer: string;
+    recentRawMessages: InterviewGraphMessage[];
+    decision: StrategistDecision;
+    jobDescription?: string;
+  }): Promise<SpeakerOutput> {
+    const content = await this.chatJson(
+      this.createSpeakerSystemPrompt(),
+      JSON.stringify({
+        task: 'professional_interview_speaker',
+        stage: input.stage,
+        latestAnswer: input.latestAnswer,
+        recentRawMessages: input.recentRawMessages.slice(-6),
+        decision: input.decision,
+        jobDescription: input.jobDescription ?? '',
+      }),
+      this.speakerModel,
+    );
+    const parsed = this.parseJsonObject(content);
+
+    return {
+      messageType: this.toGraphMessageType(parsed.messageType, input.decision.action),
+      content: this.toText(parsed.content, input.decision.speakerInstruction),
+    };
+  }
+
+  async runEvaluator(input: {
+    turnSummaries: InterviewTurnSummary[];
+    strategistDecisionLog?: unknown;
+    memoryState?: unknown;
+    strategySnapshot?: unknown;
+    jobDescription?: string;
+    recentRawMessages: InterviewGraphMessage[];
+  }): Promise<EvaluatorOutput> {
+    const content = await this.chatJson(
+      this.createEvaluatorSystemPrompt(),
+      JSON.stringify({
+        task: 'professional_interview_final_evaluation',
+        rule: 'Only evaluate after the interview is finished. Do not invent evidence.',
+        turnSummaries: input.turnSummaries.slice(-20),
+        strategistDecisionLog: input.strategistDecisionLog ?? null,
+        memoryState: input.memoryState ?? null,
+        strategySnapshot: input.strategySnapshot ?? null,
+        jobDescription: input.jobDescription ?? '',
+        recentRawMessages: input.recentRawMessages.slice(-6),
+      }),
+      this.evaluatorModel,
+    );
+    const parsed = this.parseJsonObject(content);
+
+    return {
+      overallScore: this.toHundredScore(parsed.overallScore, 70),
+      dimensionScores: this.normalizeEvaluatorDimensionScores(parsed.dimensionScores),
+      verifiedStrengths: this.toStringArray(parsed.verifiedStrengths).slice(0, 8),
+      unverifiedClaims: this.toStringArray(parsed.unverifiedClaims).slice(0, 8),
+      followUpChainReview: this.toArray(parsed.followUpChainReview).map((item) => ({
+        topic: this.toText(item.topic, '本轮专业面试'),
+        chain: this.toStringArray(item.chain).slice(0, 8),
+        result: this.toText(item.result, '追问链路已完成，需要结合复盘继续训练。'),
+      })).slice(0, 6),
+      nextPracticeActions: this.toStringArray(parsed.nextPracticeActions).slice(0, 8),
+    };
+  }
+
   private createInterviewSystemPrompt() {
     return [
       '你是一名资深中文技术面试官，正在为 AI 求职助手生成结构化模拟面试题。',
@@ -260,6 +457,51 @@ export class InterviewAiService {
       'JSON 格式：{"questions":[{"content":"题目文本","dimension":"general|professional|behavioral|stress|english","dimensionLabel":"中文维度名","difficulty":"easy|medium|hard","sourceType":"rule|resume|job_description|knowledge_base","sourceLabel":"中文来源说明"}]}',
       '如果提供 resumeContext，必须优先围绕简历中的项目、技能、工作经历生成问题，sourceType 使用 resume，sourceLabel 使用“基于关联简历”。',
       '题目必须具体、可回答、适合口头面试。若提供知识库素材，优先结合真实面试记录追问。',
+    ].join('\n');
+  }
+
+  private createListenerSystemPrompt() {
+    return [
+      '你是专业模拟面试 LangGraph 管线中的 Listener Agent。',
+      '职责：只听懂候选人回答，抽取事实、实体、槽位缺口和风险信号。',
+      '禁止提出问题，禁止做面试决策，禁止评价候选人好坏。',
+      '请严格返回 JSON object，不要 Markdown，不要解释。',
+      'JSON 格式：{"summary":"回答摘要","entities":["实体"],"facts":["事实"],"missingSlots":["缺失槽位"],"riskSignals":["风险信号"]}',
+    ].join('\n');
+  }
+
+  private createStrategistSystemPrompt() {
+    return [
+      '你是专业模拟面试 LangGraph 管线中的 Strategist Agent。',
+      '职责：根据 Listener 输出、状态机、JD 和记忆池，下达下一步面试决策。',
+      '禁止写最终自然语言问题，最终话术交给 Speaker Agent。',
+      'action 只能是 continue_deep_dive、clarify、pressure_test、switch_topic、guide_back、wrap_up。',
+      'nextState 只能是 S0_ICE_BREAK、S1_PROJECT_ENTRY、S2_CORE_DEEP_DIVE、S3_EXTENSION、S4_REVERSE_QUESTION、FINISHED。',
+      '请严格返回 JSON object，不要 Markdown，不要解释。',
+      'JSON 格式：{"action":"continue_deep_dive","nextState":"S2_CORE_DEEP_DIVE","messageType":"follow_up","reason":"决策原因","targetCapability":"能力点","targetResumeNode":"可选简历节点","speakerInstruction":"给 Speaker 的话术指令，只要求问一个核心问题","memoryPatch":["记忆补丁"]}',
+    ].join('\n');
+  }
+
+  private createSpeakerSystemPrompt() {
+    return [
+      '你是专业模拟面试 LangGraph 管线中的 Speaker Agent。',
+      '职责：把 Strategist 的决策转成真实、自然、专业的中文面试官口吻。',
+      '每次只能问一个核心问题。不要评分，不要总结优缺点，不要解释你的策略。',
+      '必须尽量引用候选人上一轮回答中的关键词，让追问显得贴着回答走。',
+      '请严格返回 JSON object，不要 Markdown，不要解释。',
+      'JSON 格式：{"messageType":"follow_up|pressure_test|topic_switch|closing|question","content":"面试官下一句话"}',
+    ].join('\n');
+  }
+
+  private createEvaluatorSystemPrompt() {
+    return [
+      '你是专业模拟面试 LangGraph 管线中的 Evaluator Agent，只在面试结束后工作。',
+      '职责：根据 Listener 摘要、Strategist 决策日志、记忆池、JD 和最近原始对话，生成最终复盘评估。',
+      '必须区分“已被回答证据支撑的优势”和“候选人声称但未被追问验证的内容”。',
+      '不要再提出面试问题，不要改写候选人简历，不要凭空补充经历。',
+      '评分要保守：证据越具体、追问链越闭环，分数越高；泛泛而谈、缺指标、回避问题要扣分。',
+      '请严格返回 JSON object，不要 Markdown，不要解释。',
+      'JSON 格式：{"overallScore":1-100,"dimensionScores":{"technicalDepth":1-100,"logic":1-100,"jdFit":1-100,"evidenceDensity":1-100,"communication":1-100},"verifiedStrengths":["有证据支撑的优势"],"unverifiedClaims":["未验证或缺证据的主张"],"followUpChainReview":[{"topic":"话题","chain":["追问节点"],"result":"链路结果"}],"nextPracticeActions":["下一步练习动作"]}',
     ].join('\n');
   }
 
@@ -392,7 +634,7 @@ export class InterviewAiService {
     });
   }
 
-  private async chatJson(systemPrompt: string, userPrompt: string) {
+  private async chatJson(systemPrompt: string, userPrompt: string, model = this.model) {
     const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
       throw new InternalServerErrorException('缺少 DEEPSEEK_API_KEY，请检查 .env 文件');
@@ -408,7 +650,7 @@ export class InterviewAiService {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: this.model,
+        model,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
@@ -458,10 +700,10 @@ export class InterviewAiService {
       item.sourceType,
       input.knowledgeSnippets.length > 0
         ? 'knowledge_base'
-        : input.resumeContext
-          ? 'resume'
-          : input.jobDescription?.trim()
-            ? 'job_description'
+        : input.jobDescription?.trim()
+          ? 'job_description'
+          : input.resumeContext
+            ? 'resume'
             : 'rule',
     );
     const difficulty = this.toDifficulty(item.difficulty);
@@ -510,12 +752,83 @@ export class InterviewAiService {
     return Math.min(Math.max(Math.round(score), 1), 10);
   }
 
+  private toHundredScore(value: unknown, fallback: number) {
+    const score = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(score)) {
+      return fallback;
+    }
+    return Math.min(Math.max(Math.round(score), 1), 100);
+  }
+
+  private normalizeEvaluatorDimensionScores(value: unknown) {
+    const scores = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+
+    return {
+      technicalDepth: this.toHundredScore(scores.technicalDepth, 70),
+      logic: this.toHundredScore(scores.logic, 70),
+      jdFit: this.toHundredScore(scores.jdFit, 70),
+      evidenceDensity: this.toHundredScore(scores.evidenceDensity, 70),
+      communication: this.toHundredScore(scores.communication, 70),
+    };
+  }
+
   private toConfidence(value: unknown) {
     const confidence = typeof value === 'number' ? value : Number(value);
     if (!Number.isFinite(confidence)) {
       return 0.6;
     }
     return Math.min(Math.max(confidence, 0), 1);
+  }
+
+  private toGraphAction(value: unknown): StrategistDecision['action'] {
+    return value === 'continue_deep_dive' ||
+      value === 'clarify' ||
+      value === 'pressure_test' ||
+      value === 'switch_topic' ||
+      value === 'guide_back' ||
+      value === 'wrap_up'
+      ? value
+      : 'continue_deep_dive';
+  }
+
+  private toGraphStage(value: unknown, fallback: InterviewStage): InterviewStage {
+    return value === 'S0_ICE_BREAK' ||
+      value === 'S1_PROJECT_ENTRY' ||
+      value === 'S2_CORE_DEEP_DIVE' ||
+      value === 'S3_EXTENSION' ||
+      value === 'S4_REVERSE_QUESTION' ||
+      value === 'FINISHED'
+      ? value
+      : fallback;
+  }
+
+  private toGraphMessageType(
+    value: unknown,
+    action: StrategistDecision['action'],
+  ): StrategistDecision['messageType'] {
+    if (
+      value === 'question' ||
+      value === 'follow_up' ||
+      value === 'pressure_test' ||
+      value === 'topic_switch' ||
+      value === 'closing'
+    ) {
+      return value;
+    }
+    if (action === 'pressure_test') return 'pressure_test';
+    if (action === 'switch_topic') return 'topic_switch';
+    if (action === 'wrap_up') return 'closing';
+    return 'follow_up';
+  }
+
+  private defaultNextStage(stage: InterviewStage, action: StrategistDecision['action']): InterviewStage {
+    if (action === 'wrap_up') return 'S4_REVERSE_QUESTION';
+    if (stage === 'S0_ICE_BREAK') return 'S1_PROJECT_ENTRY';
+    if (stage === 'S1_PROJECT_ENTRY') return 'S2_CORE_DEEP_DIVE';
+    if (action === 'switch_topic') return 'S3_EXTENSION';
+    return stage;
   }
 
   private normalizeQuestionMix(value: unknown) {

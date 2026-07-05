@@ -97,6 +97,9 @@ export interface BackendReport {
   questions?: unknown;
   nextActions?: unknown;
   topDirections?: unknown;
+  advantageSummary?: unknown;
+  weaknessSummary?: unknown;
+  interviewerSteeringReview?: unknown;
   companyName?: string | null;
   positionName?: string | null;
   resumeName?: string | null;
@@ -196,6 +199,16 @@ export interface BackendInterviewProgress {
   totalWords: number;
   distribution: Array<{ label: string; done: number; total: number }>;
 }
+
+export type InterviewStreamEvent =
+  | { type: "thinking_start" }
+  | { type: "listener_done"; summary?: string }
+  | { type: "strategist_done"; action?: string; nextState?: string; reason?: string }
+  | { type: "speaker_delta"; delta: string }
+  | { type: "speaker_done"; content: string; messageType?: string }
+  | { type: "turn_saved" }
+  | { type: "session"; session: InterviewSession }
+  | { type: "error"; message?: string };
 
 export async function login(email: string, password: string) {
   const result = await apiRequest<BackendLoginResult>("/auth/login", {
@@ -328,6 +341,11 @@ export const backendApi = {
     file: File;
     onUploadProgress?: (progress: number) => void;
   }) => uploadAudioReviewThroughKnowledgeBase(input),
+  saveInterviewReview: (input: {
+    title: string;
+    interviewDate: string;
+    transcript: string;
+  }) => saveInterviewReviewToKnowledgeBase(input),
   transcribeKnowledgeRecord: (knowledgeBaseId: string, recordId: string, audioUrl?: string) =>
     apiRequest<BackendKnowledgeRecord>(
       `/interview-knowledge-bases/${knowledgeBaseId}/records/${recordId}/transcribe`,
@@ -373,6 +391,10 @@ export const backendApi = {
     apiRequest<InterviewSession | null>("/interviews/sessions/active/latest"),
   interviewSession: (sessionId: string) =>
     apiRequest<InterviewSession>(`/interviews/sessions/${sessionId}`),
+  deleteInterviewSession: (sessionId: string) =>
+    apiRequest<{ sessionId: string }>(`/interviews/sessions/${sessionId}`, {
+      method: "DELETE",
+    }),
   addInterviewQuestion: (
     sessionId: string,
     input: { content?: string; dimension?: "general" | "professional" | "behavioral" | "stress" | "english" },
@@ -401,6 +423,11 @@ export const backendApi = {
       method: "POST",
       body: { answer },
     }),
+  submitInterviewAnswerStream: (
+    sessionId: string,
+    answer: string,
+    onEvent: (event: InterviewStreamEvent) => void,
+  ) => streamInterviewAnswer(sessionId, answer, onEvent),
   nextInterviewQuestion: (sessionId: string) =>
     apiRequest<InterviewSession>(`/interviews/sessions/${sessionId}/next-question`, {
       method: "POST",
@@ -609,11 +636,34 @@ async function uploadAudioReviewThroughKnowledgeBase(input: {
   }
 }
 
+async function saveInterviewReviewToKnowledgeBase(input: {
+  title: string;
+  interviewDate: string;
+  transcript: string;
+}) {
+  const knowledgeBase = await ensureNamedKnowledgeBase({
+    name: "Mock Interview Reviews",
+    description: "Saved mock interview transcripts and review reports",
+    focusAreas: ["mock-interview", "review", "follow-up"],
+  });
+  const record = await backendApi.createManualKnowledgeRecord(knowledgeBase.id, input);
+  void backendApi.buildKnowledgeRecord(knowledgeBase.id, record.id).catch(() => undefined);
+  return record;
+}
+
 async function ensureAudioReviewKnowledgeBase() {
+  return ensureNamedKnowledgeBase({
+    name: "Audio Reviews",
+    description: "Uploaded interview audio reviews",
+    focusAreas: ["interview", "review"],
+  });
+}
+
+async function ensureNamedKnowledgeBase(input: { name: string; description: string; focusAreas: string[] }) {
   const list = await apiRequest<Paginated<BackendKnowledgeBase>>(
     "/interview-knowledge-bases?page=1&pageSize=50",
   );
-  const existing = list.items.find((item) => item.name === "Audio Reviews");
+  const existing = list.items.find((item) => item.name === input.name);
 
   if (existing) {
     return existing;
@@ -622,9 +672,9 @@ async function ensureAudioReviewKnowledgeBase() {
   return apiRequest<BackendKnowledgeBase>("/interview-knowledge-bases", {
     method: "POST",
     body: {
-      name: "Audio Reviews",
-      description: "Uploaded interview audio reviews",
-      focusAreas: ["interview", "review"],
+      name: input.name,
+      description: input.description,
+      focusAreas: input.focusAreas,
     },
   });
 }
@@ -678,6 +728,67 @@ function uploadFormWithProgress<T>(
     xhr.onerror = () => reject(new Error("网络连接失败，录音上传未完成。"));
     xhr.send(formData);
   });
+}
+
+async function streamInterviewAnswer(
+  sessionId: string,
+  answer: string,
+  onEvent: (event: InterviewStreamEvent) => void,
+) {
+  const token = getAuthToken();
+  const headers = new Headers({ "Content-Type": "application/json" });
+
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/interviews/sessions/${sessionId}/answer/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ answer }),
+  });
+
+  if (!response.ok || !response.body) {
+    const details = await readResponse(response);
+    const message =
+      typeof details === "object" && details && "message" in details
+        ? String((details as { message: unknown }).message)
+        : `流式回答提交失败，状态码 ${response.status}`;
+    throw new Error(message);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      const dataLine = frame
+        .split("\n")
+        .find((line) => line.startsWith("data: "));
+      if (!dataLine) continue;
+      try {
+        onEvent(JSON.parse(dataLine.slice(6)) as InterviewStreamEvent);
+      } catch {
+        // Ignore malformed SSE frames and keep the stream alive.
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const dataLine = buffer
+      .split("\n")
+      .find((line) => line.startsWith("data: "));
+    if (dataLine) {
+      onEvent(JSON.parse(dataLine.slice(6)) as InterviewStreamEvent);
+    }
+  }
 }
 
 async function apiBlobRequest(path: string, options: RequestInit = {}, timeoutMs = 45_000) {
@@ -812,6 +923,9 @@ export function mapBackendReport(report: BackendReport): InterviewReport {
     questions,
     nextActions,
     topDirections: toTopDirections(report.topDirections),
+    advantageSummary: toAdvantageSummary(report.advantageSummary),
+    weaknessSummary: toWeaknessSummary(report.weaknessSummary),
+    interviewerSteeringReview: toInterviewerSteeringReview(report.interviewerSteeringReview),
   };
 }
 
@@ -860,6 +974,62 @@ function toActionPlans(value: unknown) {
     text: typeof item === "object" && item && "text" in item ? String(item.text) : String(item),
     completed: typeof item === "object" && item && "completed" in item ? Boolean(item.completed) : false,
   }));
+}
+
+function readObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function toAdvantageSummary(value: unknown): InterviewReport["advantageSummary"] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const object = readObject(item);
+      if (!object) return null;
+      return {
+        advantage: String(object.advantage ?? "已验证亮点"),
+        evidence: toStringArray(object.evidence, []),
+        howToAmplify: String(object.howToAmplify ?? ""),
+        steeringExamples: toStringArray(object.steeringExamples, []),
+        risk: String(object.risk ?? ""),
+      };
+    })
+    .filter((item): item is NonNullable<InterviewReport["advantageSummary"]>[number] => Boolean(item));
+}
+
+function toWeaknessSummary(value: unknown): InterviewReport["weaknessSummary"] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const object = readObject(item);
+      if (!object) return null;
+      return {
+        weakness: String(object.weakness ?? "待验证风险"),
+        observedIn: toStringArray(object.observedIn, []),
+        whyItMatters: String(object.whyItMatters ?? ""),
+        repairPlan: toStringArray(object.repairPlan, []),
+      };
+    })
+    .filter((item): item is NonNullable<InterviewReport["weaknessSummary"]>[number] => Boolean(item));
+}
+
+function toInterviewerSteeringReview(value: unknown): InterviewReport["interviewerSteeringReview"] {
+  const object = readObject(value);
+  if (!object) {
+    return {
+      successfulSteering: [],
+      failedSteering: [],
+      nextTimeTactics: [],
+    };
+  }
+
+  return {
+    successfulSteering: toStringArray(object.successfulSteering, []),
+    failedSteering: toStringArray(object.failedSteering, []),
+    nextTimeTactics: toStringArray(object.nextTimeTactics, []),
+  };
 }
 
 function toDimensions(value: unknown) {

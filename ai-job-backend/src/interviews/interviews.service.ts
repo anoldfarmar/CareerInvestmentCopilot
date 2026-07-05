@@ -7,6 +7,8 @@ import { AddInterviewQuestionDto } from './dto/add-interview-question.dto';
 import { CreateInterviewSessionDto } from './dto/create-interview-session.dto';
 import { SubmitAnswerDto } from './dto/submit-answer.dto';
 import { SubmitQuestionFeedbackDto } from './dto/submit-question-feedback.dto';
+import { InterviewGraphService, type InterviewGraphProgressEvent } from './graph/interview-graph.service';
+import { DEFAULT_INTERVIEW_STAGE, type InterviewGraphMessage, type InterviewStage } from './graph/interview-graph.state';
 import { InterviewAiService, type InterviewKnowledgeSnippet, type InterviewStrategySnapshot } from './interview-ai.service';
 import { InterviewRagService, type RagRecord } from './interview-rag.service';
 
@@ -33,7 +35,7 @@ type InterviewMessage = {
   content: string;
   createdAt: string;
   questionId?: string;
-  messageType?: 'question' | 'follow_up' | 'answer_feedback' | 'closing';
+  messageType?: 'question' | 'follow_up' | 'pressure_test' | 'topic_switch' | 'answer_feedback' | 'closing';
   dimension?: string;
   difficulty?: InterviewQuestionDifficulty;
   sourceLabel?: string;
@@ -62,6 +64,7 @@ export class InterviewsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly interviewAiService?: InterviewAiService,
+    private readonly interviewGraphService?: InterviewGraphService,
     private readonly reportsService?: ReportsService,
     private readonly interviewRagService?: InterviewRagService,
     private readonly activityService?: ActivityService,
@@ -84,6 +87,12 @@ export class InterviewsService {
     const questions = await this.buildQuestionPlanWithAi(userId, data, resumeContext);
     const strategySnapshot = await this.buildStrategySnapshot(userId, data, resumeContext, questions);
     const firstQuestion = this.findFirstActiveQuestion(questions);
+    const firstAssistantContent = await this.buildFirstAssistantContent(
+      data,
+      firstQuestion,
+      resumeContext,
+      strategySnapshot,
+    );
     const session = await this.prisma.interviewSession.create({
       data: {
         type: data.interviewType,
@@ -96,7 +105,7 @@ export class InterviewsService {
         questionFeedback: {},
         strategySnapshot: strategySnapshot as unknown as Prisma.InputJsonValue,
         messages: firstQuestion
-          ? [this.createAssistantMessage('pending', firstQuestion)] satisfies InterviewMessage[]
+          ? [this.createAssistantMessage('pending', firstQuestion, firstAssistantContent)] satisfies InterviewMessage[]
           : [],
         userId,
       },
@@ -122,6 +131,9 @@ export class InterviewsService {
     resumeContext?: ResumeInterviewContext,
   ) {
     const fallbackQuestions = this.buildQuestionPlan(data, resumeContext);
+    if (this.shouldUseFastProfessionalMode(data.interviewType)) {
+      return fallbackQuestions;
+    }
 
     if (!this.interviewAiService) {
       return fallbackQuestions;
@@ -181,6 +193,9 @@ export class InterviewsService {
     questions: InterviewQuestionPreview[],
   ): Promise<InterviewStrategySnapshot> {
     const fallbackStrategy = this.buildLocalStrategySnapshot(data, resumeContext, questions);
+    if (this.shouldUseFastProfessionalMode(data.interviewType)) {
+      return fallbackStrategy;
+    }
 
     if (!this.interviewAiService) {
       return fallbackStrategy;
@@ -302,6 +317,15 @@ export class InterviewsService {
     return this.toSessionResponse(session);
   }
 
+  async removeSession(userId: number, sessionId: string) {
+    await this.findOwnedSession(userId, sessionId);
+    await this.prisma.interviewSession.delete({
+      where: { id: sessionId },
+    });
+
+    return { sessionId };
+  }
+
   async findLatestActiveSession(userId: number) {
     const session = await this.prisma.interviewSession.findFirst({
       where: { userId, ended: false },
@@ -400,6 +424,10 @@ export class InterviewsService {
     const messages = this.readMessages(session.messages);
     messages.push(this.createMessage('user', data.answer, session.id, currentQuestion?.id));
 
+    if (session.type === 'professional' && this.interviewGraphService && currentQuestion) {
+      return this.submitProfessionalGraphAnswer(session, currentQuestion, messages, data.answer);
+    }
+
     const followUpMessage = await this.createFollowUpQuestionMessage(
       session.id,
       currentQuestion,
@@ -420,6 +448,204 @@ export class InterviewsService {
     });
 
     return this.toSessionResponse(updated);
+  }
+
+  async submitAnswerStream(
+    userId: number,
+    sessionId: string,
+    data: SubmitAnswerDto,
+    emit: (event: InterviewGraphProgressEvent | { type: 'session'; session: ReturnType<typeof this.toSessionResponse> }) => void | Promise<void>,
+  ) {
+    const session = await this.findOwnedSession(userId, sessionId);
+    if (session.ended || session.type !== 'professional' || !this.interviewGraphService) {
+      const nextSession = await this.submitAnswer(userId, sessionId, data);
+      await emit({ type: 'session', session: nextSession });
+      return nextSession;
+    }
+
+    const questions = this.readQuestions(session.questions);
+    const currentQuestion = this.findQuestionByOrder(questions, session.currentQuestion);
+    if (!currentQuestion) {
+      const nextSession = await this.submitAnswer(userId, sessionId, data);
+      await emit({ type: 'session', session: nextSession });
+      return nextSession;
+    }
+
+    const messages = this.readMessages(session.messages);
+    messages.push(this.createMessage('user', data.answer, session.id, currentQuestion.id));
+
+    try {
+      const graphState = await this.interviewGraphService.runTurnWithProgress({
+        sessionId: session.id,
+        userId: session.userId,
+        latestAnswer: data.answer,
+        stage: this.readInterviewStage(session.interviewState),
+        currentQuestion: {
+          id: currentQuestion.id,
+          content: currentQuestion.content,
+          dimension: currentQuestion.dimension,
+          difficulty: currentQuestion.difficulty,
+        },
+        jobDescription: session.jobDescription ?? undefined,
+        recentRawMessages: this.toGraphMessages(messages).slice(-6),
+        turnSummaries: this.readTurnSummaries(session.memoryState),
+        strategySnapshot: this.readStrategySnapshot(session.strategySnapshot),
+        memoryState: this.readMemoryState(session.memoryState),
+        evaluationState: this.readJsonObject(session.evaluationState),
+      }, emit);
+
+      const transition = this.resolveProfessionalGraphTransition(questions, currentQuestion, graphState);
+      const speakerOutput = graphState.speakerOutput;
+      if (speakerOutput?.content) {
+        const messageQuestion = transition.messageQuestion;
+        messages.push({
+          ...this.createMessage('assistant', speakerOutput.content, session.id, messageQuestion.id),
+          messageType: speakerOutput.messageType,
+          dimension: messageQuestion.dimension,
+          difficulty: messageQuestion.difficulty,
+          sourceLabel: 'LangGraph 专业追问',
+          sourceType: messageQuestion.sourceType,
+        });
+      }
+
+      const updated = await this.prisma.interviewSession.update({
+        where: { id: session.id },
+        data: this.buildProfessionalGraphUpdate(messages, graphState, transition),
+      });
+      const response = this.toSessionResponse(updated);
+      await emit({ type: 'session', session: response });
+      return response;
+    } catch (error) {
+      this.logger.warn(`LangGraph 专业面试流式链路失败，已回落普通提交：${error instanceof Error ? error.message : String(error)}`);
+      const nextSession = await this.submitAnswer(userId, sessionId, data);
+      await emit({ type: 'session', session: nextSession });
+      return nextSession;
+    }
+  }
+
+  private async submitProfessionalGraphAnswer(
+    session: Awaited<ReturnType<typeof this.findOwnedSession>>,
+    currentQuestion: InterviewQuestionPreview,
+    messages: InterviewMessage[],
+    answer: string,
+  ) {
+    try {
+      const graphState = await this.interviewGraphService!.runTurn({
+        sessionId: session.id,
+        userId: session.userId,
+        latestAnswer: answer,
+        stage: this.readInterviewStage(session.interviewState),
+        currentQuestion: {
+          id: currentQuestion.id,
+          content: currentQuestion.content,
+          dimension: currentQuestion.dimension,
+          difficulty: currentQuestion.difficulty,
+        },
+        jobDescription: session.jobDescription ?? undefined,
+        recentRawMessages: this.toGraphMessages(messages).slice(-6),
+        turnSummaries: this.readTurnSummaries(session.memoryState),
+        strategySnapshot: this.readStrategySnapshot(session.strategySnapshot),
+        memoryState: this.readMemoryState(session.memoryState),
+        evaluationState: this.readJsonObject(session.evaluationState),
+      });
+
+      const questions = this.readQuestions(session.questions);
+      const transition = this.resolveProfessionalGraphTransition(questions, currentQuestion, graphState);
+      const speakerOutput = graphState.speakerOutput;
+      if (speakerOutput?.content) {
+        const messageQuestion = transition.messageQuestion;
+        messages.push({
+          ...this.createMessage('assistant', speakerOutput.content, session.id, messageQuestion.id),
+          messageType: speakerOutput.messageType,
+          dimension: messageQuestion.dimension,
+          difficulty: messageQuestion.difficulty,
+          sourceLabel: 'LangGraph 专业追问',
+          sourceType: messageQuestion.sourceType,
+        });
+      }
+
+      const updated = await this.prisma.interviewSession.update({
+        where: { id: session.id },
+        data: this.buildProfessionalGraphUpdate(messages, graphState, transition),
+      });
+
+      return this.toSessionResponse(updated);
+    } catch (error) {
+      this.logger.warn(`LangGraph 专业面试链路失败，已回落原追问：${error instanceof Error ? error.message : String(error)}`);
+      const followUpMessage = await this.createFollowUpQuestionMessage(
+        session.id,
+        currentQuestion,
+        answer,
+        session.jobDescription ?? undefined,
+        messages,
+        this.readStrategySnapshot(session.strategySnapshot),
+      );
+      if (followUpMessage) {
+        messages.push(followUpMessage);
+      }
+
+      const updated = await this.prisma.interviewSession.update({
+        where: { id: session.id },
+        data: {
+          messages: messages as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      return this.toSessionResponse(updated);
+    }
+  }
+
+  private buildProfessionalGraphUpdate(
+    messages: InterviewMessage[],
+    graphState: Awaited<ReturnType<InterviewGraphService['runTurn']>>,
+    transition?: {
+      currentQuestion: number;
+      ended?: boolean;
+      endedAt?: Date;
+      stage?: InterviewStage;
+    },
+  ): Prisma.InterviewSessionUpdateInput {
+    return {
+      messages: messages as unknown as Prisma.InputJsonValue,
+      currentQuestion: transition?.currentQuestion,
+      ended: transition?.ended,
+      endedAt: transition?.endedAt,
+      interviewState: {
+        stage: transition?.stage ?? graphState.stage,
+        lastAction: graphState.strategistDecision?.action,
+        targetCapability: graphState.strategistDecision?.targetCapability,
+        reason: graphState.strategistDecision?.reason,
+        updatedAt: new Date().toISOString(),
+      } as unknown as Prisma.InputJsonValue,
+      memoryState: {
+        ...(this.readMemoryState(graphState.memoryState) ?? {}),
+        turnSummaries: graphState.turnSummaries,
+        listenerOutput: graphState.listenerOutput,
+        strategistDecision: graphState.strategistDecision,
+      } as unknown as Prisma.InputJsonValue,
+      evaluationState: (graphState.evaluationState ?? {}) as unknown as Prisma.InputJsonValue,
+    };
+  }
+
+  private resolveProfessionalGraphTransition(
+    questions: InterviewQuestionPreview[],
+    currentQuestion: InterviewQuestionPreview,
+    graphState: Awaited<ReturnType<InterviewGraphService['runTurn']>>,
+  ) {
+    const action = graphState.strategistDecision?.action;
+    const nextQuestion = this.findNextActiveQuestion(questions, currentQuestion.order);
+    const shouldAdvance = action === 'switch_topic' || (action === 'wrap_up' && Boolean(nextQuestion));
+    const messageQuestion = shouldAdvance && nextQuestion ? nextQuestion : currentQuestion;
+    const ended = action === 'wrap_up' && !nextQuestion;
+    const stage = shouldAdvance ? DEFAULT_INTERVIEW_STAGE : graphState.stage;
+
+    return {
+      messageQuestion,
+      currentQuestion: messageQuestion.order,
+      ended,
+      endedAt: ended ? new Date() : undefined,
+      stage,
+    };
   }
 
   async moveToNextQuestion(userId: number, sessionId: string) {
@@ -613,19 +839,93 @@ export class InterviewsService {
   }
 
   async endSession(userId: number, sessionId: string) {
-    await this.findOwnedSession(userId, sessionId);
+    const session = await this.findOwnedSession(userId, sessionId);
+    const existingInterviewState = this.readJsonObject(session.interviewState) ?? {};
 
     await this.prisma.interviewSession.update({
       where: { id: sessionId },
       data: {
         ended: true,
         endedAt: new Date(),
+        interviewState: {
+          ...existingInterviewState,
+          stage: 'FINISHED',
+          finalEvaluationStatus: session.type === 'professional' ? 'pending' : existingInterviewState.finalEvaluationStatus,
+        } as unknown as Prisma.InputJsonValue,
       },
     });
 
-    void this.ensureReportGenerated(userId, sessionId);
+    void this.finalizeEndedInterview(userId, session);
 
     return this.getProgress(userId, sessionId);
+  }
+
+  private async finalizeEndedInterview(
+    userId: number,
+    session: Awaited<ReturnType<typeof this.findOwnedSession>>,
+  ) {
+    try {
+      const finalEvaluationState = await this.buildFinalEvaluationState({
+        ...session,
+        ended: false,
+      });
+      if (finalEvaluationState) {
+        const existingInterviewState = this.readJsonObject(session.interviewState) ?? {};
+        await this.prisma.interviewSession.update({
+          where: { id: session.id },
+          data: {
+            interviewState: {
+              ...existingInterviewState,
+              stage: 'FINISHED',
+              finalEvaluationStatus: 'done',
+              finalEvaluatedAt: new Date().toISOString(),
+            } as unknown as Prisma.InputJsonValue,
+            evaluationState: finalEvaluationState as unknown as Prisma.InputJsonValue,
+          },
+        });
+      }
+      await this.ensureReportGenerated(userId, session.id);
+    } catch (error) {
+      this.logger.warn(`专业模拟面试后台收尾失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async buildFinalEvaluationState(
+    session: Awaited<ReturnType<typeof this.findOwnedSession>>,
+  ) {
+    if (session.ended || session.type !== 'professional' || !this.interviewGraphService) {
+      return this.readJsonObject(session.evaluationState);
+    }
+
+    const messages = this.readMessages(session.messages);
+    const questions = this.readQuestions(session.questions);
+    const currentQuestion = this.findQuestionByOrder(questions, session.currentQuestion);
+
+    try {
+      return await this.interviewGraphService.runFinalEvaluation({
+        sessionId: session.id,
+        userId: session.userId,
+        latestAnswer: '',
+        stage: 'FINISHED',
+        currentQuestion: currentQuestion
+          ? {
+              id: currentQuestion.id,
+              content: currentQuestion.content,
+              dimension: currentQuestion.dimension,
+              difficulty: currentQuestion.difficulty,
+            }
+          : undefined,
+        jobDescription: session.jobDescription ?? undefined,
+        recentRawMessages: this.toGraphMessages(messages).slice(-6),
+        turnSummaries: this.readTurnSummaries(session.memoryState),
+        strategySnapshot: this.readStrategySnapshot(session.strategySnapshot),
+        memoryState: this.readMemoryState(session.memoryState),
+        evaluationState: this.readJsonObject(session.evaluationState),
+      });
+    } catch (error) {
+      this.logger.warn(`专业模拟面试最终评估失败，结束会话继续执行：${error instanceof Error ? error.message : String(error)}`);
+      return this.readJsonObject(session.evaluationState);
+    }
   }
 
   private async ensureReportGenerated(userId: number, sessionId: string) {
@@ -637,6 +937,42 @@ export class InterviewsService {
       this.logger.warn(
         `面试结束后自动生成复盘报告失败，可由前端手动重试：${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  private shouldUseFastProfessionalMode(interviewType: string) {
+    return interviewType === 'professional' && process.env.INTERVIEW_PROFESSIONAL_AI_MODE === 'fast';
+  }
+
+  private async buildFirstAssistantContent(
+    data: CreateInterviewSessionDto,
+    firstQuestion: InterviewQuestionPreview | undefined,
+    resumeContext: ResumeInterviewContext | undefined,
+    strategySnapshot: InterviewStrategySnapshot,
+  ) {
+    if (!firstQuestion) return undefined;
+    if (data.interviewType !== 'professional' || !this.interviewAiService || this.shouldUseFastProfessionalMode(data.interviewType)) {
+      return firstQuestion.content;
+    }
+
+    try {
+      const opening = await this.interviewAiService.generateOpeningQuestion({
+        question: firstQuestion,
+        jobDescription: data.jobDescription,
+        resumeContext: resumeContext
+          ? {
+              title: resumeContext.title,
+              focus: resumeContext.focus,
+              text: resumeContext.text,
+            }
+          : undefined,
+        strategySnapshot,
+      });
+
+      return this.normalizeQuestionContent(opening.content);
+    } catch (error) {
+      this.logger.warn(`DeepSeek 专业面试首问生成失败，已使用题目预览：${error instanceof Error ? error.message : String(error)}`);
+      return firstQuestion.content;
     }
   }
 
@@ -783,6 +1119,87 @@ export class InterviewsService {
     const focus = [...skills, ...projects, ...jobs].filter(Boolean);
 
     return focus.length ? focus.join('、') : '项目经历和技能栈';
+  }
+
+  private compactResumeFocus(value: string) {
+    const items = value
+      .replace(/\s+/g, ' ')
+      .split(/[、,，;；\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .filter((item) => item.length <= 28)
+      .slice(0, 3);
+
+    return items.length ? items.join('、') : '代表性项目和技能栈';
+  }
+
+  private normalizeQuestionContent(value: string) {
+    return value
+      .replace(/\s+/g, ' ')
+      .replace(/Python：.*?(?=。|$)/i, '相关技能栈')
+      .replace(/请围绕[^。]*核心要求回答，重点说明与「[^」]*」相关的证据，不要复述 JD 原文。/g, '')
+      .replace(/请从已关联简历《[^》]+》中选择一段最相关的经历作为证据。/g, '')
+      .replace(/请结合你最近一个真实项目或实习经历举证。/g, '')
+      .replace(/请结合你最近一个真实项目来回答。/g, '')
+      .replace(
+        /请结合已关联简历《([^》]+)》中的([^。]{80,})来回答。/,
+        '请从已关联简历《$1》中选择一段最相关的经历作为证据来回答。',
+      )
+      .replace(/请结合已关联简历《([^》]+)》里的[^。]*技能栈来回答。/g, '请从已关联简历《$1》中选择一段最相关的经历作为证据来回答。')
+      .replace(/\s+。/g, '。')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private parseJobContext(jobDescription?: string) {
+    const text = jobDescription?.trim() ?? '';
+    const company = text.match(/目标公司[:：]\s*([^\n]+)/)?.[1]?.trim();
+    const position = text.match(/目标岗位[:：]\s*([^\n]+)/)?.[1]?.trim();
+    const detail = text
+      .replace(/目标公司[:：]\s*[^\n]+/g, '')
+      .replace(/目标岗位[:：]\s*[^\n]+/g, '')
+      .replace(/职位详情[:：]/g, '')
+      .trim();
+    const requirement = this.extractJobRequirement(detail || text);
+
+    return {
+      company,
+      position,
+      detail,
+      requirement,
+      hasJobDescription: Boolean(text),
+    };
+  }
+
+  private extractJobRequirement(text: string) {
+    const normalized = text
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map((line) => line.replace(/^\s*\d+[、.．)]\s*/, '').trim())
+      .filter(Boolean);
+    const compactText = normalized.join(' ');
+    const capabilityRules: Array<[RegExp, string]> = [
+      [/AI|Agent|大模型|LLM|RAG|MCP|Prompt|模型训练|SFT|RL|微调/i, 'AI 应用与 Agent 工程'],
+      [/测试|评测|质量|用例|验证|可观测|稳定性/i, '测试开发与评测'],
+      [/Python|Go|Java|编程|开发|工程|架构|工具/i, '工程开发能力'],
+      [/数据|建模|指标|实验|效果|优化/i, '数据建模与效果验证'],
+      [/协同|落地|主动|学习|自驱|创新/i, '协同落地能力'],
+    ];
+    const capabilities = capabilityRules
+      .filter(([pattern]) => pattern.test(compactText))
+      .map(([, label]) => label)
+      .slice(0, 3);
+
+    if (capabilities.length) {
+      return capabilities.join('、');
+    }
+
+    const firstRequirement = normalized
+      .find((line) => /负责|参与|熟悉|掌握|具备|经验|能力|优先|要求|开发|测试|评测/i.test(line))
+      ?.replace(/[；;。].*$/, '')
+      .trim();
+
+    return firstRequirement ? firstRequirement.slice(0, 32) : '岗位核心能力';
   }
 
   private buildRetrievalQuery(data: CreateInterviewSessionDto, resumeContext?: ResumeInterviewContext) {
@@ -934,9 +1351,8 @@ export class InterviewsService {
 
   private buildDimensionPlan(type: string, count: number) {
     if (type === 'professional') {
-      return Array.from({ length: count }, (_, index) =>
-        index % 4 === 0 ? 'behavioral' : index % 3 === 0 ? 'stress' : 'professional',
-      );
+      const pattern = ['professional', 'professional', 'behavioral', 'stress'];
+      return Array.from({ length: count }, (_, index) => pattern[index % pattern.length]);
     }
     return Array.from({ length: count }, () => type);
   }
@@ -951,12 +1367,8 @@ export class InterviewsService {
     customContent?: string;
     sourceType?: InterviewQuestionSourceType;
   }): InterviewQuestionPreview {
-    const resumeHint = params.resumeContext
-      ? `请结合已关联简历《${params.resumeContext.title}》中的${params.resumeContext.focus}来回答。`
-      : '';
-    const jdHint = params.jobDescription?.trim()
-      ? '请尽量结合你对目标岗位 JD 的理解来回答。'
-      : '请结合你最近一个真实项目来回答。';
+    const jobContext = this.parseJobContext(params.jobDescription);
+    const targetRole = [jobContext.company, jobContext.position].filter(Boolean).join(' · ') || jobContext.position || '目标岗位';
     const questionPool: Record<string, string[]> = {
       general: [
         '请做一个 1 分钟自我介绍。',
@@ -964,17 +1376,27 @@ export class InterviewsService {
         '你如何判断一个机会是否适合自己？',
       ],
       professional: [
-        '请介绍一个你最有代表性的项目，并说明你的核心贡献。',
-        '你如何处理项目中的性能或稳定性问题？',
-        '你最近解决过的一个技术难点是什么？',
+        jobContext.hasJobDescription
+          ? `请介绍一段最能证明你匹配${targetRole}的项目或实习经历，并说明你的核心贡献、技术方法和结果。`
+          : '请介绍一个你最有代表性的项目，并说明你的核心贡献。',
+        jobContext.hasJobDescription
+          ? `针对${targetRole} JD 中的关键要求，你做过哪些直接相关的实践？请讲清楚场景、动作和指标。`
+          : '你如何处理项目中的性能或稳定性问题？',
+        jobContext.hasJobDescription
+          ? `如果入职后要承担${targetRole}相关任务，你会如何拆解问题、验证效果并推进落地？`
+          : '你最近解决过的一个技术难点是什么？',
       ],
       behavioral: [
+        jobContext.hasJobDescription
+          ? `请讲一次你主动推动复杂任务落地的经历，并说明这段经历如何支撑${targetRole}的岗位要求。`
+          : '请讲一次你和同事出现分歧并解决的经历。',
         '请讲一次你和同事出现分歧并解决的经历。',
-        '请讲一次你主动推动事情落地的经历。',
         '你如何面对不确定需求？',
       ],
       stress: [
-        '如果上线前一天发现核心功能有风险，你会怎么处理？',
+        jobContext.hasJobDescription
+          ? `如果面试官认为你与${targetRole}的 JD 匹配度不够，你会用哪些事实和案例补充说明？`
+          : '如果上线前一天发现核心功能有风险，你会怎么处理？',
         '如果面试官认为你的项目深度不够，你会如何补充说明？',
         '你如何面对连续面试失败？',
       ],
@@ -993,14 +1415,11 @@ export class InterviewsService {
         params.knowledgeBaseCount,
         Boolean(params.resumeContext),
       );
-    const hint = params.customContent
-      ? ''
-      : `${resumeHint || jdHint} ${resumeHint && params.jobDescription?.trim() ? jdHint : ''}`;
 
     return {
       id: `q-${params.order}`,
       order: params.order,
-      content: `第 ${params.order} 题：${baseQuestion} ${hint}`.trim(),
+      content: this.normalizeQuestionContent(`第 ${params.order} 题：${baseQuestion}`),
       dimension: params.type,
       dimensionLabel: this.getDimensionLabel(params.type),
       difficulty: this.getDifficulty(params.type, params.order, params.difficulty),
@@ -1019,11 +1438,11 @@ export class InterviewsService {
     if (knowledgeBaseCount > 0) {
       return 'knowledge_base';
     }
-    if (hasResumeContext) {
-      return 'resume';
-    }
     if (jobDescription?.trim()) {
       return 'job_description';
+    }
+    if (hasResumeContext) {
+      return 'resume';
     }
     return 'rule';
   }
@@ -1072,9 +1491,13 @@ export class InterviewsService {
     return labels[sourceType];
   }
 
-  private createAssistantMessage(sessionId: string, question: InterviewQuestionPreview): InterviewMessage {
+  private createAssistantMessage(
+    sessionId: string,
+    question: InterviewQuestionPreview,
+    content = question.content,
+  ): InterviewMessage {
     return {
-      ...this.createMessage('assistant', question.content, sessionId, question.id),
+      ...this.createMessage('assistant', content, sessionId, question.id),
       dimension: question.dimension,
       difficulty: question.difficulty,
       sourceLabel: question.sourceLabel,
@@ -1167,6 +1590,68 @@ export class InterviewsService {
     return snapshot.version === 'v1' ? snapshot : undefined;
   }
 
+  private readInterviewStage(value: Prisma.JsonValue | null): InterviewStage {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return DEFAULT_INTERVIEW_STAGE;
+    }
+    const stage = (value as Record<string, unknown>).stage;
+    return stage === 'S0_ICE_BREAK' ||
+      stage === 'S1_PROJECT_ENTRY' ||
+      stage === 'S2_CORE_DEEP_DIVE' ||
+      stage === 'S3_EXTENSION' ||
+      stage === 'S4_REVERSE_QUESTION' ||
+      stage === 'FINISHED'
+      ? stage
+      : DEFAULT_INTERVIEW_STAGE;
+  }
+
+  private readJsonObject(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as unknown as Record<string, unknown>
+      : undefined;
+  }
+
+  private readMemoryState(value: unknown): Record<string, unknown> | undefined {
+    return this.readJsonObject(value);
+  }
+
+  private readTurnSummaries(value: unknown) {
+    const memoryState = this.readMemoryState(value);
+    const summaries = memoryState?.turnSummaries;
+    if (!Array.isArray(summaries)) {
+      return [];
+    }
+
+    return summaries
+      .filter((item): item is {
+        turn: number;
+        topic: string;
+        nodeId?: string;
+        facts: string[];
+        missingSlots: string[];
+        riskSignals: string[];
+      } => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+      .map((item) => ({
+        turn: Number.isFinite(Number(item.turn)) ? Number(item.turn) : 0,
+        topic: typeof item.topic === 'string' ? item.topic : '专业面试',
+        nodeId: typeof item.nodeId === 'string' ? item.nodeId : undefined,
+        facts: Array.isArray(item.facts) ? item.facts.filter((fact): fact is string => typeof fact === 'string') : [],
+        missingSlots: Array.isArray(item.missingSlots)
+          ? item.missingSlots.filter((slot): slot is string => typeof slot === 'string')
+          : [],
+        riskSignals: Array.isArray(item.riskSignals)
+          ? item.riskSignals.filter((signal): signal is string => typeof signal === 'string')
+          : [],
+      }));
+  }
+
+  private toGraphMessages(messages: InterviewMessage[]): InterviewGraphMessage[] {
+    return messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+  }
+
   private countWords(content: string) {
     const chineseChars = content.match(/[\u4e00-\u9fa5]/g)?.length ?? 0;
     const englishWords = content.match(/[a-zA-Z0-9]+/g)?.length ?? 0;
@@ -1184,6 +1669,7 @@ export class InterviewsService {
     questions?: Prisma.JsonValue | null;
     questionFeedback?: Prisma.JsonValue | null;
     strategySnapshot?: Prisma.JsonValue | null;
+    evaluationState?: Prisma.JsonValue | null;
     knowledgeBaseIds: Prisma.JsonValue | null;
     resumeId?: number | null;
   }) {
@@ -1199,6 +1685,7 @@ export class InterviewsService {
       questionsPreview: questions,
       questionFeedback: this.readQuestionFeedback(session.questionFeedback ?? null),
       strategySnapshot: this.readStrategySnapshot(session.strategySnapshot ?? null),
+      evaluationState: this.readJsonObject(session.evaluationState ?? null),
       knowledgeBaseIds: this.readKnowledgeBaseIds(session.knowledgeBaseIds),
       resumeId: session.resumeId ?? undefined,
     };

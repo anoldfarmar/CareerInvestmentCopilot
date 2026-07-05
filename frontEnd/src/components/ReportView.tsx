@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { backendApi } from "../api/backend";
 import { InterviewReport, InterviewTranscriptItem, Todo } from "../types";
 
 interface ReportViewProps {
@@ -26,6 +27,8 @@ export default function ReportView({
 }: ReportViewProps) {
   const [activeTab, setActiveTab] = useState<"overview" | "questions" | "transcript">("overview");
   const [completedActions, setCompletedActions] = useState<Record<string, boolean>>({});
+  const [isSavingInterviewData, setIsSavingInterviewData] = useState(false);
+  const [saveInterviewDataMessage, setSaveInterviewDataMessage] = useState("");
 
   const reportScore = report?.score ?? score;
   const dimensions = report?.dimensions ?? [];
@@ -34,6 +37,17 @@ export default function ReportView({
     ? report.nextActions
     : report?.actionPlans?.map((action) => action.text) ?? [];
   const topDirections = report?.topDirections ?? [];
+  const advantageSummary = report?.advantageSummary ?? [];
+  const weaknessSummary = report?.weaknessSummary ?? [];
+  const steeringReview = report?.interviewerSteeringReview;
+  const hasProfessionalEvaluation =
+    advantageSummary.length > 0 ||
+    weaknessSummary.length > 0 ||
+    Boolean(
+      steeringReview?.successfulSteering.length ||
+      steeringReview?.failedSteering.length ||
+      steeringReview?.nextTimeTactics.length,
+    );
   const transcriptList = useMemo(
     () => (report?.transcripts?.length ? report.transcripts : transcripts),
     [report?.transcripts, transcripts],
@@ -64,6 +78,31 @@ export default function ReportView({
   const handleFinishReportFlow = async () => {
     await onIncrementDeliveries();
     onNavigate("workbench");
+  };
+
+  const handleSaveInterviewData = async () => {
+    if (isSavingInterviewData) return;
+    setIsSavingInterviewData(true);
+    setSaveInterviewDataMessage("");
+    try {
+      const title = `${report?.companyName || companyName} - ${report?.positionName || positionName} 模拟面试`;
+      const transcriptText = buildInterviewReviewText({
+        report,
+        score: reportScore,
+        transcripts: transcriptList,
+        nextActions,
+      });
+      await backendApi.saveInterviewReview({
+        title,
+        interviewDate: new Date().toISOString().slice(0, 10),
+        transcript: transcriptText,
+      });
+      setSaveInterviewDataMessage("面试数据已保存到知识库。");
+    } catch (error) {
+      setSaveInterviewDataMessage(error instanceof Error ? error.message : "保存面试数据失败，请稍后重试。");
+    } finally {
+      setIsSavingInterviewData(false);
+    }
   };
 
   return (
@@ -193,6 +232,54 @@ export default function ReportView({
                     </div>
                   </section>
                 )}
+
+                {hasProfessionalEvaluation && (
+                  <section className="bg-white border border-border-subtle rounded-xl p-4 shadow-sm">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="material-symbols-outlined text-primary text-[18px]">fact_check</span>
+                      <h3 className="font-sans text-xs font-bold text-on-surface">专业模式最终评估</h3>
+                    </div>
+
+                    {advantageSummary.length > 0 && (
+                      <div className="space-y-2.5">
+                        <p className="font-mono text-[9px] text-primary font-bold tracking-widest">VERIFIED STRENGTHS</p>
+                        {advantageSummary.map((item) => (
+                          <EvaluationBlock
+                            key={item.advantage}
+                            title={item.advantage}
+                            body={item.evidence.length ? item.evidence.join("；") : item.howToAmplify}
+                            footer={item.risk ? `风险：${item.risk}` : item.howToAmplify}
+                            tone="primary"
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {weaknessSummary.length > 0 && (
+                      <div className="mt-4 space-y-2.5">
+                        <p className="font-mono text-[9px] text-tertiary font-bold tracking-widest">UNVERIFIED / RISKS</p>
+                        {weaknessSummary.map((item) => (
+                          <EvaluationBlock
+                            key={item.weakness}
+                            title={item.weakness}
+                            body={item.whyItMatters || item.observedIn.join("；")}
+                            footer={item.repairPlan.length ? `修复：${item.repairPlan.join(" / ")}` : ""}
+                            tone="tertiary"
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {steeringReview && (
+                      <div className="mt-4 rounded-lg bg-surface-container-low p-3">
+                        <p className="font-mono text-[9px] text-primary font-bold tracking-widest">FOLLOW-UP CHAIN</p>
+                        <CompactList title="有效引导" items={steeringReview.successfulSteering} />
+                        <CompactList title="待修正引导" items={steeringReview.failedSteering} />
+                        <CompactList title="下次策略" items={steeringReview.nextTimeTactics} />
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
             )}
 
@@ -280,6 +367,23 @@ export default function ReportView({
             })}
           </div>
         </section>
+
+        <section className="px-5">
+          <button
+            type="button"
+            onClick={handleSaveInterviewData}
+            disabled={isSavingInterviewData}
+            className="w-full h-12 rounded-xl border border-primary/30 bg-white text-primary text-xs font-extrabold flex items-center justify-center gap-2 active:scale-95 disabled:opacity-60"
+          >
+            <span className={`material-symbols-outlined text-[18px] ${isSavingInterviewData ? "animate-spin" : ""}`}>
+              {isSavingInterviewData ? "progress_activity" : "save"}
+            </span>
+            {isSavingInterviewData ? "保存中" : "保存面试数据到知识库"}
+          </button>
+          {saveInterviewDataMessage && (
+            <p className="mt-2 text-center text-[11px] text-on-surface-variant">{saveInterviewDataMessage}</p>
+          )}
+        </section>
       </main>
 
       <footer className="fixed bottom-0 w-full bg-white/95 backdrop-blur-md border-t border-border-subtle z-50 left-0 right-0 max-w-md mx-auto">
@@ -316,6 +420,43 @@ function TabButton({ label, active, onClick }: { label: string; active: boolean;
   );
 }
 
+function buildInterviewReviewText({
+  report,
+  score,
+  transcripts,
+  nextActions,
+}: {
+  report?: InterviewReport | null;
+  score: number;
+  transcripts: InterviewTranscriptItem[];
+  nextActions: string[];
+}) {
+  const lines = [
+    `复盘标题：${report?.companyName ?? "目标公司"} - ${report?.positionName ?? "目标岗位"}`,
+    `综合评分：${score}`,
+    report?.summary ? `整体总结：${report.summary}` : report?.evaluation ? `整体总结：${report.evaluation}` : "",
+    report?.highlights?.length ? `面试亮点：${report.highlights.join("；")}` : "",
+    report?.suggestions?.length ? `改进建议：${report.suggestions.join("；")}` : "",
+    report?.advantageSummary?.length
+      ? `已验证亮点：${report.advantageSummary.map((item) => `${item.advantage}（${item.evidence.join("；")}）`).join("；")}`
+      : "",
+    report?.weaknessSummary?.length
+      ? `未验证或风险：${report.weaknessSummary.map((item) => `${item.weakness}：${item.whyItMatters}`).join("；")}`
+      : "",
+    nextActions.length ? `下一步行动：${nextActions.join("；")}` : "",
+    "",
+    "逐题诊断：",
+    ...(report?.questions ?? []).map((question, index) =>
+      `${index + 1}. ${question.question}\n回答：${question.answer || "未记录"}\n诊断：${question.comment || question.advice || "暂无"}`,
+    ),
+    "",
+    "对话原文：",
+    ...transcripts.map((item) => `${item.speaker}：${item.text}`),
+  ];
+
+  return lines.filter((line) => line.trim().length > 0).join("\n");
+}
+
 function InsightCard({
   title,
   icon,
@@ -344,6 +485,46 @@ function InsightCard({
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function EvaluationBlock({
+  title,
+  body,
+  footer,
+  tone,
+}: {
+  key?: React.Key;
+  title: string;
+  body: string;
+  footer?: string;
+  tone: "primary" | "tertiary";
+}) {
+  const toneClass = tone === "primary"
+    ? "bg-primary-container/10 border-primary-container/20 text-primary"
+    : "bg-tertiary-container/15 border-tertiary-container/25 text-tertiary";
+  return (
+    <article className={`rounded-lg border p-3 ${toneClass}`}>
+      <p className="text-xs font-extrabold text-on-surface leading-relaxed">{title}</p>
+      {body && <p className="mt-1.5 text-[11px] leading-relaxed text-on-surface-variant">{body}</p>}
+      {footer && <p className="mt-2 text-[10px] leading-relaxed font-mono text-outline">{footer}</p>}
+    </article>
+  );
+}
+
+function CompactList({ title, items }: { title: string; items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="mt-2.5">
+      <p className="text-[10px] font-extrabold text-on-surface mb-1">{title}</p>
+      <div className="space-y-1.5">
+        {items.map((item, index) => (
+          <p key={`${title}-${index}`} className="text-[11px] leading-relaxed text-on-surface-variant">
+            {item}
+          </p>
+        ))}
+      </div>
     </div>
   );
 }

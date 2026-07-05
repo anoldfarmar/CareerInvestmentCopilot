@@ -167,4 +167,68 @@ describe('ReportsService', () => {
     expect(result.questions[0].steeringAdvice).toContain('指标');
     expect(result.interviewerSteeringReview.failedSteering.length).toBeGreaterThan(0);
   });
+
+  it('专业面试只完成部分题目时也会生成逐题诊断', async () => {
+    const createdAt = new Date('2026-06-18T00:00:00.000Z');
+    prisma.interviewSession.findFirst.mockResolvedValue({
+      id: 'session-partial',
+      type: 'professional',
+      totalQuestions: 2,
+      questions: [
+        {
+          id: 'q-1',
+          order: 1,
+          content: '第 1 题：请介绍 SARIMAX 项目。',
+          dimension: 'professional',
+          difficulty: 'medium',
+          sourceLabel: '基于目标 JD',
+          skipped: false,
+        },
+        {
+          id: 'q-2',
+          order: 2,
+          content: '第 2 题：请介绍 A/B 实验设计。',
+          dimension: 'professional',
+          difficulty: 'medium',
+          sourceLabel: '基于目标 JD',
+          skipped: false,
+        },
+      ],
+      messages: [
+        {
+          id: 'q-1',
+          role: 'assistant',
+          questionId: 'q-1',
+          content: '请介绍 SARIMAX 项目。',
+          createdAt: createdAt.toISOString(),
+        },
+        {
+          id: 'a-1',
+          role: 'user',
+          questionId: 'q-1',
+          content: '我负责用 SARIMAX 做销量预测，并用误差指标验证。',
+          createdAt: createdAt.toISOString(),
+        },
+      ],
+    });
+    prisma.reviewReport.upsert.mockImplementation(({ create }) =>
+      Promise.resolve({
+        id: 'report-partial',
+        ...create,
+        createdAt,
+      }),
+    );
+
+    const result = await service.generate(10, { sessionId: 'session-partial' });
+
+    expect(result.questions).toHaveLength(2);
+    expect(result.questions[0]).toEqual(expect.objectContaining({ id: 'q-1' }));
+    expect(result.questions[1]).toEqual(
+      expect.objectContaining({
+        id: 'q-2',
+        answer: '',
+        issues: expect.arrayContaining(['缺少回答内容']),
+      }),
+    );
+  });
 });
