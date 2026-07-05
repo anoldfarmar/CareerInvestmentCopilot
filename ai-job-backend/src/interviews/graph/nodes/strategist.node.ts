@@ -6,8 +6,8 @@ import type {
   StrategistDecision,
 } from '../interview-graph.state';
 
-const MAX_DEEP_DIVE_TURNS = 3;
-const WRAP_UP_TURN_THRESHOLD = 8;
+const MAX_DEEP_DIVE_TURNS = 2;
+const WRAP_UP_TURN_THRESHOLD = 12;
 
 export async function strategistNode(
   state: InterviewGraphAnnotationState,
@@ -19,7 +19,7 @@ export async function strategistNode(
   const consecutiveNodeTurns = countConsecutiveNodeTurns(state);
   const hasNewFacts = hasNewListenerFacts(state);
   const shouldWrapUp = turnCount >= WRAP_UP_TURN_THRESHOLD;
-  const shouldSwitchTopic = consecutiveNodeTurns >= MAX_DEEP_DIVE_TURNS || (!hasNewFacts && consecutiveNodeTurns >= 2);
+  const shouldSwitchTopic = consecutiveNodeTurns >= MAX_DEEP_DIVE_TURNS || (!hasNewFacts && consecutiveNodeTurns >= 1);
   const action: InterviewGraphAction = shouldWrapUp
     ? 'wrap_up'
     : hasDriftRisk

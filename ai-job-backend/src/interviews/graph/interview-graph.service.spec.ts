@@ -39,7 +39,7 @@ describe('InterviewGraphService', () => {
       expect.objectContaining({
         action: 'switch_topic',
         messageType: 'topic_switch',
-        policyOverride: expect.stringContaining('连续深挖 3 轮'),
+        policyOverride: expect.stringContaining('追问 2 次'),
       }),
     );
     expect(result.stage).toBe('S3_EXTENSION');

@@ -321,10 +321,12 @@ export default function MockInterviewView({
     setIsTyping(true);
     setErrorMessage("");
     try {
+      let generatedReport: BackendReport | undefined;
       if (currentSession?.sessionId) {
         await backendApi.endInterviewSession(currentSession.sessionId);
+        generatedReport = await backendApi.generateInterviewReport(currentSession.sessionId);
       }
-      onCompleteInterview(finalScore, transcripts);
+      onCompleteInterview(finalScore, transcripts, generatedReport);
       onNavigate("feedback");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "结束面试或生成报告失败，请稍后重试。");

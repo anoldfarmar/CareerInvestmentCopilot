@@ -307,7 +307,7 @@ export class InterviewGraphService {
     const hasNewFacts = this.hasNewListenerFacts(state);
     const hasDriftRisk = Boolean(state.listenerOutput?.riskSignals.some((signal) => /跑偏|回避|无关/.test(signal)));
 
-    if (turnCount >= 8 && decision.action !== 'wrap_up') {
+    if (turnCount >= 12 && decision.action !== 'wrap_up') {
       return this.overrideDecision(state, decision, 'wrap_up', '核心轮次已覆盖，进入收尾或反问环节。');
     }
 
@@ -316,16 +316,16 @@ export class InterviewGraphService {
     }
 
     if (
-      consecutiveNodeTurns >= 3 &&
+      consecutiveNodeTurns >= 2 &&
       decision.action !== 'switch_topic' &&
       decision.action !== 'wrap_up' &&
       decision.action !== 'guide_back'
     ) {
-      return this.overrideDecision(state, decision, 'switch_topic', '当前节点已连续深挖 3 轮，按 P3 规则切换能力维度。');
+      return this.overrideDecision(state, decision, 'switch_topic', '当前主问题已追问 2 次，按覆盖优先规则切换到下一道主问题。');
     }
 
-    if (!hasNewFacts && consecutiveNodeTurns >= 2 && decision.action === 'continue_deep_dive') {
-      return this.overrideDecision(state, decision, 'switch_topic', '连续两轮没有新增事实，按 P3 规则切换话题。');
+    if (!hasNewFacts && consecutiveNodeTurns >= 1 && decision.action === 'continue_deep_dive') {
+      return this.overrideDecision(state, decision, 'switch_topic', '连续回答没有新增关键事实，按覆盖优先规则切换到下一道主问题。');
     }
 
     if (!hasNewFacts && decision.action === 'continue_deep_dive') {
