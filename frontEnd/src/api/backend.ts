@@ -577,7 +577,7 @@ function normalizeKnowledgeBaseDisplay(base: BackendKnowledgeBase): BackendKnowl
   const normalizedName = legacyKnowledgeBaseNames[base.name] ?? base.name;
   const normalizedDescription =
     normalizedName === MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME
-      ? "保存模拟面试对话、录音复盘和追问训练素材。"
+      ? "保存模拟面试对话、复盘报告和追问训练素材。"
       : normalizedName === REAL_INTERVIEW_KNOWLEDGE_BASE_NAME
         ? "用于沉淀真实面试记录、转写文本和复盘知识片段。"
         : base.description;
@@ -687,10 +687,10 @@ async function saveInterviewReviewToKnowledgeBase(input: {
 
 async function ensureAudioReviewKnowledgeBase() {
   return ensureNamedKnowledgeBase({
-    name: MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
-    aliases: ["Mock Interview Reviews"],
-    description: "保存模拟面试对话、复盘报告和追问训练素材。",
-    focusAreas: ["模拟面试复盘", "录音复盘", "追问训练"],
+    name: REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
+    aliases: ["默认面试知识库", "面试复盘知识库"],
+    description: "用于沉淀真实面试记录、转写文本和复盘知识片段。",
+    focusAreas: ["真实面试复盘", "录音转写", "简历优化素材"],
   });
 }
 

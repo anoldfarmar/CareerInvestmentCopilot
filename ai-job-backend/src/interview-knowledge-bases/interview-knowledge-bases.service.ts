@@ -385,7 +385,7 @@ export class InterviewKnowledgeBasesService {
       where: {
         userId,
         name: {
-          in: [MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME, 'Mock Interview Reviews'],
+          in: [REAL_INTERVIEW_KNOWLEDGE_BASE_NAME, '默认面试知识库', '面试复盘知识库'],
         },
       },
       orderBy: { updatedAt: 'desc' },
@@ -399,9 +399,9 @@ export class InterviewKnowledgeBasesService {
     return this.prisma.interviewKnowledgeBase.create({
       data: {
         userId,
-        name: MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
-        description: '保存模拟面试对话、录音复盘和追问训练素材。',
-        focusAreas: ['模拟面试复盘', '录音复盘', '追问训练'],
+        name: REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
+        description: '用于沉淀真实面试记录、转写文本和复盘知识片段。',
+        focusAreas: ['真实面试复盘', '录音转写', '简历优化素材'],
       },
       select: { id: true },
     });
@@ -418,6 +418,7 @@ export class InterviewKnowledgeBasesService {
             'Mock Interview Reviews',
             'Audio Reviews',
             '默认面试知识库',
+            '面试复盘知识库',
           ],
         },
       },
@@ -431,12 +432,14 @@ export class InterviewKnowledgeBasesService {
         [MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME, 'Mock Interview Reviews', 'Audio Reviews'].includes(base.name),
       ),
       MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME,
-      '保存模拟面试对话、录音复盘和追问训练素材。',
-      ['模拟面试复盘', '录音复盘', '追问训练'],
+      '保存模拟面试对话、复盘报告和追问训练素材。',
+      ['模拟面试复盘', '追问训练', '答题改进'],
     );
     await this.consolidateNamedKnowledgeBases(
       userId,
-      bases.filter((base) => [REAL_INTERVIEW_KNOWLEDGE_BASE_NAME, '默认面试知识库'].includes(base.name)),
+      bases.filter((base) =>
+        [REAL_INTERVIEW_KNOWLEDGE_BASE_NAME, '默认面试知识库', '面试复盘知识库'].includes(base.name),
+      ),
       REAL_INTERVIEW_KNOWLEDGE_BASE_NAME,
       '用于沉淀真实面试记录、转写文本和复盘知识片段。',
       ['真实面试复盘', '录音转写', '简历优化素材'],
@@ -713,7 +716,7 @@ export class InterviewKnowledgeBasesService {
   private normalizeKnowledgeBaseDescription(name: string, description: string | null) {
     const normalizedName = this.normalizeKnowledgeBaseName(name);
     if (normalizedName === MOCK_INTERVIEW_KNOWLEDGE_BASE_NAME) {
-      return '保存模拟面试对话、录音复盘和追问训练素材。';
+      return '保存模拟面试对话、复盘报告和追问训练素材。';
     }
     if (normalizedName === REAL_INTERVIEW_KNOWLEDGE_BASE_NAME) {
       return '用于沉淀真实面试记录、转写文本和复盘知识片段。';

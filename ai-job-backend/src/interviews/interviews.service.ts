@@ -13,6 +13,7 @@ import {
   DEFAULT_INTERVIEW_STAGE,
   type InterviewGraphMessage,
   type InterviewStage,
+  type QuestionPoolItem,
   type SpeakerOutput,
 } from './graph/interview-graph.state';
 import { InterviewAiService, type InterviewKnowledgeSnippet, type InterviewStrategySnapshot } from './interview-ai.service';
@@ -127,6 +128,8 @@ export class InterviewsService {
       resumeContext,
       strategySnapshot,
     );
+    // Step 5：创建时记录编排版本，已开始的会话中途不切换（回滚只影响新建会话）
+    const graphVersion: 'v1' | 'v2' = this.shouldUseGraphV2ForNewSession() ? 'v2' : 'v1';
     const session = await this.prisma.interviewSession.create({
       data: {
         type: data.interviewType,
@@ -138,6 +141,10 @@ export class InterviewsService {
         questions: questions as unknown as Prisma.InputJsonValue,
         questionFeedback: {},
         strategySnapshot: strategySnapshot as unknown as Prisma.InputJsonValue,
+        interviewState: {
+          graphVersion,
+          createdAt: new Date().toISOString(),
+        } as unknown as Prisma.InputJsonValue,
         messages: firstQuestion
           ? [this.createAssistantMessage('pending', firstQuestion, firstAssistantContent)] satisfies InterviewMessage[]
           : [],
@@ -492,6 +499,10 @@ export class InterviewsService {
     const questions = this.readQuestions(session.questions);
     const currentQuestion = this.findQuestionByOrder(questions, session.currentQuestion);
     const messages = this.readMessages(session.messages);
+    // Step 8：同一轮回答重复提交（重试）幂等拦截，不产生重复面试官消息
+    if (this.isDuplicateTurnSubmission(messages, data.answer)) {
+      return this.toSessionResponse(session);
+    }
     messages.push(this.createMessage('user', data.answer, session.id, currentQuestion?.id));
 
     if (session.type === 'professional' && this.interviewGraphService && currentQuestion) {
@@ -542,19 +553,29 @@ export class InterviewsService {
     }
 
     const messages = this.readMessages(session.messages);
+    // Step 8：同一轮回答重复提交（重试）幂等拦截，不产生重复面试官消息
+    if (this.isDuplicateTurnSubmission(messages, data.answer)) {
+      const response = this.toSessionResponse(session);
+      await emit({ type: 'session', session: response });
+      return response;
+    }
     messages.push(this.createMessage('user', data.answer, session.id, currentQuestion.id));
 
     try {
+      const graphVersion = this.readGraphVersion(session.interviewState);
       const graphState = await this.interviewGraphService.runTurnWithProgress({
         sessionId: session.id,
         userId: session.userId,
         latestAnswer: data.answer,
+        graphVersion,
+        questionPool: this.toGraphQuestionPool(questions),
         stage: this.readInterviewStage(session.interviewState),
         currentQuestion: {
           id: currentQuestion.id,
           content: currentQuestion.content,
           dimension: currentQuestion.dimension,
           difficulty: currentQuestion.difficulty,
+          order: currentQuestion.order,
         },
         jobDescription: session.jobDescription ?? undefined,
         recentRawMessages: this.toGraphMessages(messages).slice(-6),
@@ -564,7 +585,23 @@ export class InterviewsService {
         evaluationState: this.readJsonObject(session.evaluationState),
       }, emit);
 
-      const transition = this.resolveProfessionalGraphTransition(questions, currentQuestion, graphState);
+      if (graphVersion === 'v2') {
+        if (graphState.speakerOutput?.content || graphState.nextQuestion || graphState.status === 'FINISHED') {
+          messages.push(
+            this.buildV2GraphAssistantMessage(session.id, graphState, currentQuestion),
+          );
+        }
+        const updated = await this.prisma.interviewSession.update({
+          where: { id: session.id },
+          data: this.buildV2ProfessionalGraphUpdate(messages, session, graphState),
+        });
+        const response = this.toSessionResponse(updated);
+        await emit({ type: 'session', session: response });
+        return response;
+      }
+
+      // v1 legacy：保留原有二次解释路径
+      const transition = this.resolveLegacyGraphTransition(questions, currentQuestion, graphState);
       const speakerOutput = graphState.speakerOutput;
       if (speakerOutput?.content || transition.shouldAdvance || transition.ended) {
         messages.push(this.buildProfessionalGraphAssistantMessage(session.id, speakerOutput, transition));
@@ -592,16 +629,21 @@ export class InterviewsService {
     answer: string,
   ) {
     try {
+      const questions = this.readQuestions(session.questions);
+      const graphVersion = this.readGraphVersion(session.interviewState);
       const graphState = await this.interviewGraphService!.runTurn({
         sessionId: session.id,
         userId: session.userId,
         latestAnswer: answer,
+        graphVersion,
+        questionPool: this.toGraphQuestionPool(questions),
         stage: this.readInterviewStage(session.interviewState),
         currentQuestion: {
           id: currentQuestion.id,
           content: currentQuestion.content,
           dimension: currentQuestion.dimension,
           difficulty: currentQuestion.difficulty,
+          order: currentQuestion.order,
         },
         jobDescription: session.jobDescription ?? undefined,
         recentRawMessages: this.toGraphMessages(messages).slice(-6),
@@ -611,8 +653,21 @@ export class InterviewsService {
         evaluationState: this.readJsonObject(session.evaluationState),
       });
 
-      const questions = this.readQuestions(session.questions);
-      const transition = this.resolveProfessionalGraphTransition(questions, currentQuestion, graphState);
+      if (graphVersion === 'v2') {
+        if (graphState.speakerOutput?.content || graphState.nextQuestion || graphState.status === 'FINISHED') {
+          messages.push(
+            this.buildV2GraphAssistantMessage(session.id, graphState, currentQuestion),
+          );
+        }
+        const updated = await this.prisma.interviewSession.update({
+          where: { id: session.id },
+          data: this.buildV2ProfessionalGraphUpdate(messages, session, graphState),
+        });
+        return this.toSessionResponse(updated);
+      }
+
+      // v1 legacy：保留原有二次解释路径
+      const transition = this.resolveLegacyGraphTransition(questions, currentQuestion, graphState);
       const speakerOutput = graphState.speakerOutput;
       if (speakerOutput?.content || transition.shouldAdvance || transition.ended) {
         messages.push(this.buildProfessionalGraphAssistantMessage(session.id, speakerOutput, transition));
@@ -682,7 +737,12 @@ export class InterviewsService {
     };
   }
 
-  private resolveProfessionalGraphTransition(
+  /**
+   * @deprecated Step 5：v1（legacy）专用 —— 图外二次解释动作（switch_topic/wrap_up 都当“推进下一题”）。
+   * v2 会话不再调用，改由 {@link buildV2GraphAssistantMessage} / {@link buildV2ProfessionalGraphUpdate}
+   * 直接消费图结果（nextQuestion / status / endReason）。
+   */
+  private resolveLegacyGraphTransition(
     questions: InterviewQuestionPreview[],
     currentQuestion: InterviewQuestionPreview,
     graphState: Awaited<ReturnType<InterviewGraphService['runTurn']>>,
@@ -703,6 +763,147 @@ export class InterviewsService {
       stage,
       shouldAdvance,
     };
+  }
+
+  // Step 5：v2 —— 直接消费图结果的转换（不再读 strategistDecision.action 做二次解释）
+  private resolveV2GraphTransition(
+    session: Awaited<ReturnType<typeof this.findOwnedSession>>,
+    graphState: Awaited<ReturnType<InterviewGraphService['runTurn']>>,
+    currentQuestion: InterviewQuestionPreview,
+  ) {
+    const next = graphState.nextQuestion;
+    const ended = graphState.status === 'FINISHED';
+    return {
+      messageQuestion: next ?? currentQuestion,
+      currentQuestion: next?.order ?? session.currentQuestion,
+      ended,
+      endedAt: ended ? new Date() : undefined,
+      stage: graphState.stage,
+      shouldAdvance: Boolean(next),
+    };
+  }
+
+  // Step 5：v2 落库更新 —— interviewState 写入 status/endReason/routeTrace/policyOverrides/graphVersion
+  private buildV2ProfessionalGraphUpdate(
+    messages: InterviewMessage[],
+    session: Awaited<ReturnType<typeof this.findOwnedSession>>,
+    graphState: Awaited<ReturnType<InterviewGraphService['runTurn']>>,
+  ): Prisma.InterviewSessionUpdateInput {
+    const next = graphState.nextQuestion;
+    const ended = graphState.status === 'FINISHED';
+    return {
+      messages: messages as unknown as Prisma.InputJsonValue,
+      currentQuestion: next?.order ?? session.currentQuestion,
+      ended,
+      endedAt: ended ? new Date() : undefined,
+      interviewState: {
+        ...(this.readJsonObject(session.interviewState) ?? {}),
+        stage: graphState.stage,
+        status: graphState.status,
+        endReason: graphState.endReason,
+        lastAction: graphState.strategistDecision?.action,
+        finalAction: graphState.strategistDecision?.action,
+        routeTrace: graphState.routeTrace,
+        policyOverrides: graphState.policyOverrides,
+        graphVersion: 'v2',
+        updatedAt: new Date().toISOString(),
+      } as unknown as Prisma.InputJsonValue,
+      memoryState: {
+        ...(this.readMemoryState(graphState.memoryState) ?? {}),
+        turnSummaries: graphState.turnSummaries,
+        listenerOutput: graphState.listenerOutput,
+        proposedDecision: graphState.proposedDecision,
+        strategistDecision: graphState.strategistDecision,
+      } as unknown as Prisma.InputJsonValue,
+      ...(graphState.evaluationState
+        ? { evaluationState: graphState.evaluationState as unknown as Prisma.InputJsonValue }
+        : {}),
+    };
+  }
+
+  // Step 5：v2 消息构建 —— 结束 → closing；切题 → 下一题（Speaker 话术或预生成题目文案）；
+  // 其余 → 追问消息
+  private buildV2GraphAssistantMessage(
+    sessionId: string,
+    graphState: Awaited<ReturnType<InterviewGraphService['runTurn']>>,
+    currentQuestion: InterviewQuestionPreview,
+  ): InterviewMessage {
+    const next = graphState.nextQuestion;
+    const speakerOutput = graphState.speakerOutput;
+    if (graphState.status === 'FINISHED') {
+      return this.createClosingMessage(sessionId);
+    }
+    if (next) {
+      return {
+        ...this.createMessage('assistant', speakerOutput?.content || next.content, sessionId, next.id),
+        messageType: 'question',
+        dimension: next.dimension,
+        difficulty: this.toQuestionDifficulty(next.difficulty),
+        sourceLabel: next.sourceLabel ?? 'LangGraph 专业追问',
+        sourceType: this.toQuestionSourceType(next.sourceType, currentQuestion.sourceType),
+      };
+    }
+    return {
+      ...this.createMessage('assistant', speakerOutput?.content ?? '', sessionId, currentQuestion.id),
+      messageType: speakerOutput?.messageType,
+      dimension: currentQuestion.dimension,
+      difficulty: currentQuestion.difficulty,
+      sourceLabel: 'LangGraph 专业追问',
+      sourceType: currentQuestion.sourceType,
+      sourceDetails: currentQuestion.sourceDetails,
+    };
+  }
+
+  private readGraphVersion(value: Prisma.JsonValue | null): 'v1' | 'v2' {
+    return this.readJsonObject(value)?.graphVersion === 'v2' ? 'v2' : 'v1';
+  }
+
+  // Step 8：幂等拦截 —— 最后一条用户消息内容相同且其后已有面试官回复，视为重试
+  private isDuplicateTurnSubmission(
+    messages: InterviewMessage[],
+    answer: string,
+  ): boolean {
+    const lastUser = [...messages].reverse().find((message) => message.role === 'user');
+    return Boolean(
+      lastUser && lastUser.content === answer && messages.at(-1)?.role === 'assistant',
+    );
+  }
+
+  private toQuestionDifficulty(value: unknown): InterviewQuestionDifficulty {
+    return value === 'easy' || value === 'medium' || value === 'hard' ? value : 'medium';
+  }
+
+  private toQuestionSourceType(
+    value: unknown,
+    fallback: InterviewQuestionSourceType,
+  ): InterviewQuestionSourceType {
+    return value === 'rule' ||
+      value === 'resume' ||
+      value === 'job_description' ||
+      value === 'knowledge_base' ||
+      value === 'custom'
+      ? value
+      : fallback;
+  }
+
+  private shouldUseGraphV2ForNewSession() {
+    return (
+      process.env.INTERVIEW_GRAPH_V2_ENABLED === '1' ||
+      process.env.INTERVIEW_GRAPH_V2_ENABLED === 'true'
+    );
+  }
+
+  private toGraphQuestionPool(questions: InterviewQuestionPreview[]): QuestionPoolItem[] {
+    return questions.map((question) => ({
+      id: question.id,
+      order: question.order,
+      content: question.content,
+      dimension: question.dimension,
+      difficulty: question.difficulty,
+      sourceType: question.sourceType,
+      sourceLabel: question.sourceLabel,
+      skipped: question.skipped,
+    }));
   }
 
   private buildProfessionalGraphAssistantMessage(
@@ -929,6 +1130,16 @@ export class InterviewsService {
   async endSession(userId: number, sessionId: string) {
     const session = await this.findOwnedSession(userId, sessionId);
     const existingInterviewState = this.readJsonObject(session.interviewState) ?? {};
+    // Step 5：v2 会话若已在图内完成评估（wrap_up 分支），不重复评估，直接置 done
+    const alreadyEvaluated =
+      this.readGraphVersion(session.interviewState) === 'v2' &&
+      Boolean(this.readJsonObject(session.evaluationState));
+    const finalEvaluationStatus =
+      session.type === 'professional'
+        ? alreadyEvaluated
+          ? 'done'
+          : 'pending'
+        : existingInterviewState.finalEvaluationStatus;
 
     await this.prisma.interviewSession.update({
       where: { id: sessionId },
@@ -938,12 +1149,16 @@ export class InterviewsService {
         interviewState: {
           ...existingInterviewState,
           stage: 'FINISHED',
-          finalEvaluationStatus: session.type === 'professional' ? 'pending' : existingInterviewState.finalEvaluationStatus,
+          status: 'FINISHED',
+          finalEvaluationStatus,
+          ...(alreadyEvaluated
+            ? { finalEvaluatedAt: new Date().toISOString() }
+            : {}),
         } as unknown as Prisma.InputJsonValue,
       },
     });
 
-    void this.finalizeEndedInterview(userId, session);
+    void this.finalizeEndedInterview(userId, session, alreadyEvaluated);
 
     return this.getProgress(userId, sessionId);
   }
@@ -951,26 +1166,30 @@ export class InterviewsService {
   private async finalizeEndedInterview(
     userId: number,
     session: Awaited<ReturnType<typeof this.findOwnedSession>>,
+    skipEvaluation = false,
   ) {
     try {
-      const finalEvaluationState = await this.buildFinalEvaluationState({
-        ...session,
-        ended: false,
-      });
-      if (finalEvaluationState) {
-        const existingInterviewState = this.readJsonObject(session.interviewState) ?? {};
-        await this.prisma.interviewSession.update({
-          where: { id: session.id },
-          data: {
-            interviewState: {
-              ...existingInterviewState,
-              stage: 'FINISHED',
-              finalEvaluationStatus: 'done',
-              finalEvaluatedAt: new Date().toISOString(),
-            } as unknown as Prisma.InputJsonValue,
-            evaluationState: finalEvaluationState as unknown as Prisma.InputJsonValue,
-          },
+      if (!skipEvaluation) {
+        const finalEvaluationState = await this.buildFinalEvaluationState({
+          ...session,
+          ended: false,
         });
+        if (finalEvaluationState) {
+          const existingInterviewState = this.readJsonObject(session.interviewState) ?? {};
+          await this.prisma.interviewSession.update({
+            where: { id: session.id },
+            data: {
+              interviewState: {
+                ...existingInterviewState,
+                stage: 'FINISHED',
+                status: 'FINISHED',
+                finalEvaluationStatus: 'done',
+                finalEvaluatedAt: new Date().toISOString(),
+              } as unknown as Prisma.InputJsonValue,
+              evaluationState: finalEvaluationState as unknown as Prisma.InputJsonValue,
+            },
+          });
+        }
       }
       await this.ensureReportGenerated(userId, session.id);
     } catch (error) {
@@ -982,6 +1201,13 @@ export class InterviewsService {
     session: Awaited<ReturnType<typeof this.findOwnedSession>>,
   ) {
     if (session.ended || session.type !== 'professional' || !this.interviewGraphService) {
+      return this.readJsonObject(session.evaluationState);
+    }
+    // Step 5：v2 会话已在图内完成评估（wrap_up 分支）时直接复用，不再重复调 runFinalEvaluation
+    if (
+      this.readGraphVersion(session.interviewState) === 'v2' &&
+      this.readJsonObject(session.evaluationState)
+    ) {
       return this.readJsonObject(session.evaluationState);
     }
 

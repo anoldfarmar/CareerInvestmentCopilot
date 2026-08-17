@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { BackendKnowledgeRecord, backendApi } from "../api/backend";
+import { API_BASE_URL } from "../api/client";
 import { Resume } from "../types";
 
 interface AudioReviewViewProps {
@@ -327,6 +328,7 @@ export function AudioReviewResult({
   const chunks = normalizeChunks(record.chunks);
   const transcript = record.roleTranscript || record.speakerTranscript || record.transcript || "";
   const audioSize = typeof record.audioFileSize === "number" ? formatFileSize(record.audioFileSize) : "";
+  const audioPlaybackUrl = resolveAudioPlaybackUrl(record.audioUrl, record.audioFileSize);
 
   return (
     <div className="space-y-4">
@@ -347,9 +349,9 @@ export function AudioReviewResult({
             </div>
           </div>
         </div>
-        {record.audioUrl && (
+        {audioPlaybackUrl && (
           <audio controls className="mt-4 w-full h-9">
-            <source src={record.audioUrl} />
+            <source src={audioPlaybackUrl} />
           </audio>
         )}
       </div>
@@ -801,6 +803,25 @@ function formatFileSize(bytes: number) {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function resolveAudioPlaybackUrl(audioUrl?: string, audioFileSize?: number) {
+  if (!audioUrl) return undefined;
+
+  // 上传到本项目的录音永久保存在后端 AUDIO_UPLOAD_DIR。
+  // ASR 使用的 ngrok 公网域名可能变化，播放时应始终走当前 API 服务。
+  if (typeof audioFileSize === "number") {
+    try {
+      const pathname = new URL(audioUrl).pathname;
+      if (/^\/audio\/user-[^/]+\/[^/]+$/.test(pathname)) {
+        return `${API_BASE_URL}${pathname}`;
+      }
+    } catch {
+      // 非法 URL 交给浏览器处理并显示原生播放失败状态。
+    }
+  }
+
+  return audioUrl;
 }
 
 function formatDateTime(value: string) {

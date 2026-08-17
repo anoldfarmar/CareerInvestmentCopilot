@@ -1874,3 +1874,36 @@ npm test -- --runInBand
 - `RealInterviewRecord` 与 `InterviewKnowledgeBase` 的 Prisma 关系已配置 `onDelete: Cascade`，所以删除知识库时，其中的面试记录会被数据库自动级联删除。
 - 前端知识库列表页新增小号“删除”按钮；知识库详情页每条面试记录新增小号“删除”按钮。
 - 删除成功后前端会刷新 `interview-knowledge-bases` 查询缓存，列表和详情会同步更新。
+
+## 2026-08-16 Speaker 流式 JSON 外壳展示修复
+
+### 问题现象
+
+- 专业模拟面试的追问气泡会直接显示
+  `{"messageType":"follow_up","content":"..."}`，而不是只显示面试官话术。
+- 异常 JSON 同时会被写入 `InterviewSession.messages[].content`。
+
+### 根因
+
+- 非流式 `runSpeaker()` 会解析 Speaker JSON 并提取 `content`。
+- 流式 `streamSpeaker()` 复用了“严格返回 JSON”的提示词，却把 DeepSeek SSE 中的原始增量直接推送给前端，没有解析 JSON 外壳。
+- 原单元测试只模拟了纯文本增量，没有覆盖真实模型的分片 JSON 输出。
+
+### 修复
+
+- 为流式 Speaker 使用独立提示词，要求只输出面试官自然语言，不输出 JSON、Markdown 或协议字段。
+- 后端增加输出模式检测：
+  - 纯文本继续实时推送；
+  - 如果模型仍返回 JSON 或 JSON Markdown fence，先缓存完整结果，再只推送 `content`；
+  - JSON 损坏时回退到 Strategist 的 `speakerInstruction`，不向用户展示协议层文本。
+- 前端 `MockInterviewView` 增加历史消息兼容：对可解析的 Speaker JSON 只显示 `content`。
+- 定点清理会话 `cmsvwebtk0000jcurntvlab8a` 中的一条异常消息：保留消息 ID、时间、题目关联和 `messageType`，仅将 `content` 改为自然语言正文。
+
+### 验证
+
+- `npm test -- --runInBand interview-ai.service.spec.ts`：4 项通过，包含分片 JSON 回归用例。
+- `npm run build`（`ai-job-backend`）：通过。
+- `npm run lint` 和 `npm run build`（`frontEnd`）：通过。
+- 后端全量测试：14/16 个 suites、109/111 个 tests 通过。剩余 2 项为本修复范围外的现有 Mock 问题：
+  - `resumes.service.spec.ts` 的 DeepSeek Mock 缺少 `analyzeJdMatch`，且断言未包含新的 `jdMatchResult`；
+  - `overview.service.spec.ts` 的 Prisma Mock 缺少 `job.groupBy`。

@@ -348,12 +348,31 @@ export default function MockInterviewView({
     value.messages.map((message) => ({
       id: message.id,
       sender: message.role === "assistant" ? "ai" : "user",
-      text: message.content,
+      text: message.role === "assistant" ? unwrapAssistantMessageContent(message.content) : message.content,
       timestamp: new Date(message.createdAt).toLocaleTimeString("zh-CN", {
         minute: "2-digit",
         second: "2-digit",
       }),
     }));
+
+  function unwrapAssistantMessageContent(content: string) {
+    const normalized = content.trim();
+    if (!normalized.startsWith("{") && !normalized.startsWith("```")) {
+      return content;
+    }
+
+    try {
+      const unfenced = normalized.startsWith("```")
+        ? normalized.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
+        : normalized;
+      const parsed = JSON.parse(unfenced) as { content?: unknown };
+      return typeof parsed.content === "string" && parsed.content.trim()
+        ? parsed.content.trim()
+        : content;
+    } catch {
+      return content;
+    }
+  }
 
   return (
     <div id="mock-interview-root" className="flex flex-col h-screen max-w-md mx-auto relative bg-background overflow-hidden pb-36">

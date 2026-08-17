@@ -412,6 +412,145 @@ export class InterviewAiService {
     };
   }
 
+  // Step 7：Speaker 原生流式 —— DeepSeek /chat/completions stream:true，按 SSE data: 行解析
+  // choices[0].delta.content 增量；模型不支持流式或失败时由调用方回退 runSpeaker / 本地节点。
+  async streamSpeaker(
+    input: {
+      stage: InterviewStage;
+      latestAnswer: string;
+      recentRawMessages: InterviewGraphMessage[];
+      decision: StrategistDecision;
+      jobDescription?: string;
+    },
+    onDelta?: (delta: string) => void,
+  ): Promise<SpeakerOutput> {
+    const apiKey = process.env.DEEPSEEK_API_KEY;
+    if (!apiKey) {
+      throw new InternalServerErrorException('缺少 DEEPSEEK_API_KEY，请检查 .env 文件');
+    }
+
+    const response = await externalFetch(`${this.baseUrl}/chat/completions`, {
+      serviceName: 'DeepSeek',
+      timeoutMs: Number(
+        process.env.INTERVIEW_SPEAKER_TIMEOUT_MS ?? process.env.DEEPSEEK_TIMEOUT_MS ?? 60000,
+      ),
+      userMessage: 'AI 面试服务繁忙，请稍后重试',
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.speakerModel,
+        messages: [
+          { role: 'system', content: this.createStreamingSpeakerSystemPrompt() },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              task: 'professional_interview_speaker',
+              stage: input.stage,
+              latestAnswer: input.latestAnswer,
+              recentRawMessages: input.recentRawMessages.slice(-6),
+              decision: input.decision,
+              jobDescription: input.jobDescription ?? '',
+              stream: true,
+            }),
+          },
+        ],
+        stream: true,
+        temperature: 0.2,
+      }),
+    });
+
+    if (!response.ok) {
+      const result = (await response.json().catch(() => null)) as
+        | { error?: { message?: string } }
+        | null;
+      throw new BadGatewayException(result?.error?.message ?? 'AI 面试服务繁忙，请稍后重试');
+    }
+    if (!response.body) {
+      throw new BadGatewayException('DeepSeek 没有返回流式响应');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = '';
+    let buffer = '';
+    let outputMode: 'undetermined' | 'plain_text' | 'structured_json' = 'undetermined';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) {
+          continue;
+        }
+        const data = trimmed.slice(5).trim();
+        if (data === '[DONE]') {
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(data) as {
+            choices?: Array<{ delta?: { content?: string } }>;
+          };
+          const delta = parsed.choices?.[0]?.delta?.content ?? '';
+          if (delta) {
+            fullContent += delta;
+            if (outputMode === 'undetermined') {
+              const firstVisibleContent = fullContent.trimStart();
+              if (!firstVisibleContent) {
+                continue;
+              }
+              outputMode = firstVisibleContent.startsWith('{') || firstVisibleContent.startsWith('`')
+                ? 'structured_json'
+                : 'plain_text';
+              if (outputMode === 'plain_text') {
+                onDelta?.(fullContent);
+              }
+            } else if (outputMode === 'plain_text') {
+              onDelta?.(delta);
+            }
+          }
+        } catch {
+          // 忽略无法解析的 SSE 行
+        }
+      }
+    }
+
+    if (outputMode === 'structured_json') {
+      let parsed: Record<string, unknown> = {};
+      try {
+        const value = extractJsonObject(fullContent);
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          parsed = value as Record<string, unknown>;
+        }
+      } catch {
+        // 流式模型偶尔仍会违背纯文本约束；JSON 损坏时使用 Strategist 指令兜底，
+        // 绝不把协议层 JSON 原样展示给用户。
+      }
+      const content = this.toText(parsed.content, input.decision.speakerInstruction);
+      onDelta?.(content);
+      return {
+        messageType: this.toGraphMessageType(parsed.messageType, input.decision.action),
+        content,
+      };
+    }
+
+    const content = fullContent.trim() || input.decision.speakerInstruction;
+    if (outputMode === 'undetermined') {
+      onDelta?.(content);
+    }
+    return {
+      messageType: this.toGraphMessageType(undefined, input.decision.action),
+      content,
+    };
+  }
+
   async runEvaluator(input: {
     turnSummaries: InterviewTurnSummary[];
     strategistDecisionLog?: unknown;
@@ -490,6 +629,16 @@ export class InterviewAiService {
       '必须尽量引用候选人上一轮回答中的关键词，让追问显得贴着回答走。',
       '请严格返回 JSON object，不要 Markdown，不要解释。',
       'JSON 格式：{"messageType":"follow_up|pressure_test|topic_switch|closing|question","content":"面试官下一句话"}',
+    ].join('\n');
+  }
+
+  private createStreamingSpeakerSystemPrompt() {
+    return [
+      '你是专业模拟面试 LangGraph 管线中的 Speaker Agent。',
+      '职责：把 Strategist 的决策转成真实、自然、专业的中文面试官口吻。',
+      '每次只能问一个核心问题。不要评分，不要总结优缺点，不要解释你的策略。',
+      '必须尽量引用候选人上一轮回答中的关键词，让追问显得贴着回答走。',
+      '只输出面试官下一句话的纯文本，不要输出 JSON、Markdown、messageType 或 content 字段名。',
     ].join('\n');
   }
 

@@ -7,6 +7,9 @@ build/
 coverage/
 .nyc_output/
 
+plan/
+专利/
+
 # Logs
 logs/
 *.log
@@ -45,3 +48,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Nested/local git metadata backups
 *.git-backup/
 *.git.local/
+
+# temp
+.codex-tmp/
